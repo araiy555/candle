@@ -36,6 +36,9 @@ APIパスワードは `config.toml` やリポジトリには書かず、環境�
 
 ## 使い方
 
+`start.bat` をダブルクリックすると、接続確認 → 仮想売買の起動 → 管理画面の表示までを行います。
+個別のコマンドは次のとおりです。
+
 ```powershell
 python -m candle check            # 接続確認（トークン発行とランキング取得のみ）
 python -m candle paper            # 仮想売買＋管理画面 http://localhost:8765 （Ctrl+Cで終了）
