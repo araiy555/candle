@@ -206,3 +206,33 @@ def test_watch_mode_notifies_only_selected_strategy_without_trading():
     assert store.recent_signals("paper")[0]["action"] == "通知のみ"
     e.on_clock(bars[-1].end)
     assert e.snapshot["mode"] == "通知のみ" and e.snapshot["signals"][0]["name"] == "トヨタ"
+
+
+def test_same_signal_is_notified_only_once_even_after_restart():
+    store = Store(":memory:")
+    rm = RiskManager(RiskLimits())
+    sent = []
+    mk = lambda: PaperEngine(store, rm, enabled={"tweezer_bottom"}, trade_enabled=False,
+                             notify=lambda *a: sent.append(a), notify_ids={"tweezer_bottom"})
+    bars = make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "7203")
+    e = mk()
+    for b in bars:
+        e.on_bar(b)
+    e.on_bar(bars[-1])                                           # 同じ足が再度届いても通知しない
+    assert len(sent) == 1
+    e2 = mk()                                                    # 再起動して同じ足を再生
+    for b in bars:
+        e2.on_bar(b)
+    assert len(sent) == 1 and len(store.recent_signals("paper")) == 1
+
+
+def test_no_signal_from_unconfirmed_or_incomplete_bar():
+    store = Store(":memory:")
+    sent = []
+    e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"},
+                    trade_enabled=False, notify=lambda *a: sent.append(a))
+    bars = make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "7203")
+    bars[-1].complete = False                                    # 欠落を含む足では判定しない
+    for b in bars:
+        e.on_bar(b)
+    assert sent == []

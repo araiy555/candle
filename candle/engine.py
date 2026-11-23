@@ -37,6 +37,9 @@ class PaperEngine:
         self.pending: dict[str, list[tuple[str, datetime, float]]] = defaultdict(list)
         self.open: list[Trade] = store.load_trades(MODE, open_only=True)
         self.day = None
+        # 同一戦略・同一銘柄・同一発生時刻のサインは1回だけ扱う（再起動後も重複させない）
+        self.seen: set[tuple[str, str, str]] = {
+            (r["strategy_id"], r["symbol"], r["time"]) for r in store.recent_signals(MODE, 2000)}
         self.snapshot: dict = {}
         today = datetime.now(JST).date()
         risk.realized_today = sum(t.pnl() for t in store.load_trades(MODE)
@@ -55,6 +58,10 @@ class PaperEngine:
             low = s.detect(window, self.params)
             if low is None:
                 continue
+            key = (s.id, bar.symbol, bar.end.isoformat())
+            if key in self.seen:
+                continue
+            self.seen.add(key)
             log.info("サイン %s %s %s 安値%s", s.name, bar.symbol, bar.end.strftime("%H:%M"), low)
             if self.notify and (self.notify_ids is None or s.id in self.notify_ids):
                 label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
