@@ -22,7 +22,8 @@ MODE = "paper"
 class PaperEngine:
     def __init__(self, store: Store, risk: RiskManager, params: Params | None = None,
                  slippage: float = 0.0005, exit_after: time = time(15, 20),
-                 enabled: set[str] | None = None):
+                 enabled: set[str] | None = None, trade_enabled: bool = True,
+                 notify=None, notify_ids: set[str] | None = None):
         self.store, self.risk = store, risk
         self.params = params or Params()
         self.slippage, self.exit_after = slippage, exit_after
@@ -30,6 +31,9 @@ class PaperEngine:
         self.history: dict[str, deque[Bar]] = defaultdict(lambda: deque(maxlen=80))
         self.prices: dict[str, float] = {}
         self.watchlist: list[str] = []
+        self.names: dict[str, str] = {}
+        self.trade_enabled = trade_enabled   # False: 通知のみ（仮想売買もしない）
+        self.notify, self.notify_ids = notify, notify_ids
         self.pending: dict[str, list[tuple[str, datetime, float]]] = defaultdict(list)
         self.open: list[Trade] = store.load_trades(MODE, open_only=True)
         self.day = None
@@ -49,10 +53,17 @@ class PaperEngine:
         window = contiguous_tail(list(h))
         for s in self.strategies:
             low = s.detect(window, self.params)
-            if low is not None:
+            if low is None:
+                continue
+            log.info("サイン %s %s %s 安値%s", s.name, bar.symbol, bar.end.strftime("%H:%M"), low)
+            if self.notify and (self.notify_ids is None or s.id in self.notify_ids):
+                label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
+                self.notify(f"{s.name}  {label}",
+                            f"{bar.end:%H:%M} 終値 {bar.close:,.1f} / パターン安値 {low:,.1f}")
+            if self.trade_enabled:
                 self.pending[bar.symbol].append((s.id, bar.end, low))
-                log.info("サイン %s %s %s 安値%s", s.name, bar.symbol,
-                         bar.end.strftime("%H:%M"), low)
+            else:
+                self.store.add_signal(MODE, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ")
 
     def on_price(self, symbol: str, price: float, ts: datetime) -> None:
         self.prices[symbol] = price
@@ -130,12 +141,14 @@ class PaperEngine:
         signals = self.store.recent_signals(MODE, 50)
         for s in signals:
             s["strategy"] = name(s.pop("strategy_id"))
+            s["name"] = self.names.get(s["symbol"])
         return dict(
-            time=now.isoformat(), mode="仮想売買", halted=self.risk.halted,
+            time=now.isoformat(), mode="仮想売買" if self.trade_enabled else "通知のみ", halted=self.risk.halted,
             feed_ok=self.risk.feed_ok, realized_today=self.risk.realized_today,
             limits=vars(self.risk.limits),
             exposure=sum(t.entry_price * t.qty for t in self.open),
-            watchlist=[dict(symbol=s, price=self.prices.get(s)) for s in self.watchlist],
+            watchlist=[dict(symbol=s, name=self.names.get(s), price=self.prices.get(s))
+                       for s in self.watchlist],
             positions=positions, signals=signals, history=history,
             stats=[dict(strategy=s.name, **summarize(by_strategy.get(s.id, [])))
                    for s in STRATEGIES])

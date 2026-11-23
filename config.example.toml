@@ -41,3 +41,11 @@ disabled_strategies = []
 
 [web]
 port = 8765                # 管理画面 http://localhost:8765 （このPCからのみ閲覧可）
+
+[notify]
+# watch（通知のみ）モードで通知する戦略ID
+strategies = ["tweezer_bottom"]
+desktop = true             # Windowsのデスクトップ通知
+sound = true               # 通知音
+# DiscordまたはSlackのWebhook URLを入れるとスマホにも届く（空なら使わない）
+webhook_url = ""

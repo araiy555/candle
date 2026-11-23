@@ -36,11 +36,14 @@ APIパスワードは `config.toml` やリポジトリには書かず、環境�
 
 ## 使い方
 
-`start.bat` をダブルクリックすると、接続確認 → 仮想売買の起動 → 管理画面の表示までを行います。
+`start.bat` をダブルクリックすると、接続確認 → 通知モード（`watch`）の起動 → 管理画面の表示までを行います。
+通知モードは売買代金上位50銘柄を監視し、毛抜き底が出たらデスクトップ通知と音で知らせます（売買はしません）。
 個別のコマンドは次のとおりです。
 
 ```powershell
 python -m candle check            # 接続確認（トークン発行とランキング取得のみ）
+python -m candle watch            # 上位50銘柄を監視し、サインを通知する（売買なし）
+python -m candle notify-test      # 通知が届くかを試す
 python -m candle paper            # 仮想売買＋管理画面 http://localhost:8765 （Ctrl+Cで終了）
 python -m candle collect          # 足の収集だけ行う（売買判定なし）
 python -m candle bars 7203        # 保存済みの足を表示

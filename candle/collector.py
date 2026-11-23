@@ -153,6 +153,8 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
                     backoff = 1.0
                     if engine:
                         engine.watchlist = symbols
+                        wl = store.latest_watchlist()
+                        engine.names = {r["symbol"]: r["name"] for r in wl[1]} if wl else {}
                     feed(True)
                     while not stop.is_set():
                         try:

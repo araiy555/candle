@@ -14,5 +14,5 @@ if errorlevel 1 (
   exit /b 1
 )
 start "" http://localhost:8765
-%PY% -m candle paper
+%PY% -m candle watch
 pause

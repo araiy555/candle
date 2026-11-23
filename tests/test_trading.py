@@ -184,3 +184,25 @@ def test_yahoo_parse_filters_off_session():
                                          "volume": [100, 200, 300, None]}]}}]}}
     bars = parse_chart("7203", payload)
     assert [b.start.strftime("%H:%M") for b in bars] == ["09:00", "09:05"]
+
+
+def test_watch_mode_notifies_only_selected_strategy_without_trading():
+    store = Store(":memory:")
+    rm = RiskManager(RiskLimits())
+    rm.feed_ok = True
+    sent = []
+    e = PaperEngine(store, rm, enabled={"tweezer_bottom"}, trade_enabled=False,
+                    notify=lambda title, body: sent.append((title, body)),
+                    notify_ids={"tweezer_bottom"})
+    e.names = {"7203": "トヨタ"}
+    feed_hammer(e, "6758")                                       # 別の形では通知しない
+    assert sent == []
+    bars = make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "7203")
+    for b in bars:
+        e.on_bar(b)
+    assert sent == [("毛抜き底  7203 トヨタ", "09:40 終値 1,006.0 / パターン安値 995.0")]
+    e.on_price("7203", 1007, bars[-1].end)
+    assert e.open == [] and store.load_trades("paper") == []     # 売買はしない
+    assert store.recent_signals("paper")[0]["action"] == "通知のみ"
+    e.on_clock(bars[-1].end)
+    assert e.snapshot["mode"] == "通知のみ" and e.snapshot["signals"][0]["name"] == "トヨタ"

@@ -24,7 +24,7 @@ tr:last-child td{border-bottom:0}.pos{color:var(--up)}.neg{color:var(--down)}.mu
 button{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
 button.stop{background:#c0392b;border-color:#c0392b;color:#fff;font-weight:600}
 .kpis{display:flex;flex-wrap:wrap;gap:20px}.kpis div span{display:block;color:var(--mut);font-size:12px}.kpis b{font-size:18px;white-space:nowrap}
-.watch{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px}
+.watch{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px}
 .watch div{border:1px solid var(--line);border-radius:6px;padding:4px 8px;display:flex;justify-content:space-between}
 .empty{color:var(--mut);padding:8px 0}
 </style></head><body>
@@ -72,12 +72,12 @@ async function load(){
     d.stats.map(s=>[esc(s.strategy),s.trades,s.win_rate==null?'-':n(s.win_rate*100,1)+'%',s.pf==null?'-':n(s.pf,2),
       yen(s.expectancy),rr(s.expectancy_r),yen(s.total),s.avg_hold_min==null?'-':n(s.avg_hold_min)+'分']),'');
   table('signals',['戦略','銘柄','発生時刻','価格','パターン安値','結果'],
-    d.signals.map(s=>[esc(s.strategy),esc(s.symbol),md(s.time),n(s.price,1),n(s.pattern_low,1),
-      s.action==='entry'?'エントリー':'<span class="mut">見送り: '+esc(s.action)+'</span>']),'まだサインはありません');
+    d.signals.map(s=>[esc(s.strategy),esc(s.symbol)+' <span class="mut">'+esc(s.name||'')+'</span>',md(s.time),n(s.price,1),n(s.pattern_low,1),
+      s.action==='entry'?'エントリー':s.action==='通知のみ'?'通知':'<span class="mut">見送り: '+esc(s.action)+'</span>']),'まだサインはありません');
   table('history',['戦略','銘柄','株数','買い','買値','決済','売値','理由','損益(円)','R'],
     d.history.map(t=>[esc(t.strategy),esc(t.symbol),n(t.qty),md(t.entry_time),n(t.entry_price,1),md(t.exit_time),n(t.exit_price,1),
       esc(t.reason),yen(t.pnl),rr(t.r)]),'決済済みの取引はありません');
-  $('watch').innerHTML=d.watchlist.map(w=>`<div><span>${esc(w.symbol)}</span><span>${n(w.price,1)}</span></div>`).join('')||'<div class="empty">未登録</div>';
+  $('watch').innerHTML=d.watchlist.map(w=>`<div><span>${esc(w.symbol)} <span class="mut">${esc(w.name||'')}</span></span><span>${n(w.price,1)}</span></div>`).join('')||'<div class="empty">未登録</div>';
 }
 $('btn').onclick=async()=>{
   if(!halted&&!confirm('新規の買いを停止します。保有中のポジションの損切り・決済は継続します。'))return;

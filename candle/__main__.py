@@ -13,8 +13,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config", help="設定ファイル（既定: config.toml）")
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("notify-test", help="通知が届くかを試す")
     sub.add_parser("check", help="接続確認（トークン発行とランキング取得のみ）")
     sub.add_parser("collect", help="PUSH配信を受信して5分足を保存する")
+    sub.add_parser("watch", help="売買代金上位50銘柄を監視し、サインが出たら通知する（売買なし）")
     sub.add_parser("paper", help="仮想売買と管理画面を起動する（実際の注文は出さない）")
     p = sub.add_parser("backtest", help="保存済みの5分足で戦略別バックテストを行う")
     p.add_argument("--source", help="データの出所で絞る（kabu_push / yahoo）")
@@ -30,6 +32,15 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     cfg = load_config(args.config)
+
+    if args.cmd == "notify-test":
+        import time
+        from .notify import Notifier
+        Notifier(cfg.notify_desktop, cfg.notify_sound, cfg.webhook_url).send(
+            "毛抜き底  7203 トヨタ（テスト）", "10:35 終値 3,010.0 / パターン安値 2,995.0")
+        time.sleep(8)
+        print("通知を送りました。画面右下に表示されたか確認してください。")
+        return 0
 
     if args.cmd == "check":
         from .kabu_client import KabuClient
@@ -51,19 +62,33 @@ def main(argv: list[str] | None = None) -> int:
             pass
         return 0
 
-    if args.cmd == "paper":
+    if args.cmd in ("paper", "watch"):
         from datetime import time as dtime
         from .collector import run_collector
         from .engine import PaperEngine
+        from .notify import Notifier
         from .patterns import STRATEGIES
         from .risk import RiskManager
         from .web import start_web
 
+        watch = args.cmd == "watch"
+        notifier = Notifier(cfg.notify_desktop, cfg.notify_sound, cfg.webhook_url)
+        if watch:
+            cfg.universe_size = 50   # 売買しないので予備枠は不要。登録上限いっぱいまで監視する
+            enabled = set(cfg.watch_strategies)
+            unknown = enabled - {s.id for s in STRATEGIES}
+            if unknown:
+                print(f"notify.strategies に不明な戦略IDがあります: {sorted(unknown)}")
+                return 1
+        else:
+            enabled = {s.id for s in STRATEGIES} - set(cfg.disabled_strategies)
+
         def factory(store):
             h, m = map(int, cfg.exit_after.split(":"))
             engine = PaperEngine(store, RiskManager(cfg.risk), slippage=cfg.slippage,
-                                 exit_after=dtime(h, m),
-                                 enabled={s.id for s in STRATEGIES} - set(cfg.disabled_strategies))
+                                 exit_after=dtime(h, m), enabled=enabled,
+                                 trade_enabled=not watch, notify=notifier.send,
+                                 notify_ids=set(cfg.watch_strategies))
             start_web(engine, cfg.web_port)
             print(f"管理画面: http://localhost:{cfg.web_port}")
             return engine
