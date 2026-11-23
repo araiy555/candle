@@ -23,3 +23,21 @@ record_raw = true
 
 [bars]
 minutes = 5
+
+[risk]
+# 全戦略共通の上限（円）。仮の値です。運用前に必ず見直してください。
+total_cap = 1000000        # 総投資上限
+per_symbol_cap = 500000    # 1銘柄あたりの投資上限
+daily_max_loss = 20000     # 1日の最大損失（到達で新規停止）
+min_risk_pct = 0.001       # 損切り幅がこれ未満（価格比）のサインは見送る
+max_risk_pct = 0.03        # 損切り幅がこれを超えるサインは見送る
+
+[trading]
+slippage = 0.0005          # 約定の不利な滑り（価格比、片道）
+exit_after = "15:20"       # この時刻以降は新規停止・全決済（持ち越しなし）
+# 止めたい戦略ID: tweezer_bottom, bullish_engulfing, hammer, morning_star,
+#                 piercing_line, bullish_harami, double_bottom
+disabled_strategies = []
+
+[web]
+port = 8765                # 管理画面 http://localhost:8765 （このPCからのみ閲覧可）

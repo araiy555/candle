@@ -35,11 +35,13 @@ class Pipeline:
     """配信1件 → 足生成 → 保存。実接続と記録データの再生で共通に使う。"""
 
     def __init__(self, store: Store, minutes: int = 5, raw_dir: Path | None = None,
-                 on_bar: Callable[[Bar], None] | None = None):
+                 on_bar: Callable[[Bar], None] | None = None,
+                 on_price: Callable[[str, float, datetime], None] | None = None):
         self.store = store
         self.builder = BarBuilder(minutes)
         self.raw_dir = raw_dir
         self.on_bar = on_bar
+        self.on_price = on_price
         self.messages = 0
         self._raw_file = None
         self._raw_day = None
@@ -55,6 +57,8 @@ class Pipeline:
         bars = self.builder.on_tick(str(slim["Symbol"]), ts, slim["CurrentPrice"],
                                     slim["TradingVolume"], slim["HighPrice"], slim["LowPrice"])
         self._emit(bars)
+        if self.on_price and slim["CurrentPrice"] is not None:
+            self.on_price(str(slim["Symbol"]), float(slim["CurrentPrice"]), ts)
         return bars
 
     def flush(self, now: datetime | None = None) -> list[Bar]:
@@ -108,19 +112,29 @@ def replay(lines: Iterable[str], store: Store, minutes: int = 5) -> Pipeline:
     return pipe
 
 
-async def run_collector(cfg: Config, stop: asyncio.Event | None = None) -> None:
+async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
+                        engine_factory=None) -> None:
     """トークン取得 → 監視銘柄選定 → 登録 → PUSH受信。切断時は自動で再接続する。"""
     import websockets  # 実接続時のみ必要
 
     stop = stop or asyncio.Event()
     store = Store(cfg.db_path)
-    pipe = Pipeline(store, cfg.bar_minutes, cfg.data_dir / "raw" if cfg.record_raw else None)
+    engine = engine_factory(store) if engine_factory else None
+    pipe = Pipeline(store, cfg.bar_minutes, cfg.data_dir / "raw" if cfg.record_raw else None,
+                    on_bar=engine.on_bar if engine else None,
+                    on_price=engine.on_price if engine else None)
+
+    def feed(ok: bool) -> None:
+        if engine:
+            engine.risk.feed_ok = ok
     client = KabuClient(cfg.rest_url, cfg.api_password)
 
     async def flusher():
         while not stop.is_set():
             await asyncio.sleep(1)
             pipe.flush()
+            if engine:
+                engine.on_clock(datetime.now(JST))
 
     flush_task = asyncio.create_task(flusher())
     backoff = 1.0
@@ -137,6 +151,9 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None) -> None:
                                               max_size=None) as ws:
                     log.info("PUSH配信に接続しました (%s)", cfg.ws_url)
                     backoff = 1.0
+                    if engine:
+                        engine.watchlist = symbols
+                    feed(True)
                     while not stop.is_set():
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
@@ -146,6 +163,7 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None) -> None:
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # 切断・kabuステーション未起動など
+                feed(False)  # 切断中は新規の仮想買いを止める
                 pipe.builder.mark_gap()
                 log.warning("接続エラー: %s — %.0f秒後に再接続します", e, backoff)
                 try:

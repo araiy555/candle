@@ -5,6 +5,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .risk import RiskLimits
+
 
 @dataclass
 class Config:
@@ -17,6 +19,11 @@ class Config:
     data_dir: Path = Path("data")
     record_raw: bool = True
     bar_minutes: int = 5
+    risk: RiskLimits = field(default_factory=RiskLimits)
+    slippage: float = 0.0005
+    exit_after: str = "15:20"
+    disabled_strategies: list[str] = field(default_factory=list)
+    web_port: int = 8765
 
     @property
     def rest_url(self) -> str:
@@ -58,6 +65,11 @@ def load_config(path: str | Path | None = None) -> Config:
         data_dir=Path(data.get("dir", "data")),
         record_raw=bool(data.get("record_raw", True)),
         bar_minutes=int(bars.get("minutes", 5)),
+        risk=RiskLimits(**raw.get("risk", {})),
+        slippage=float(raw.get("trading", {}).get("slippage", 0.0005)),
+        exit_after=str(raw.get("trading", {}).get("exit_after", "15:20")),
+        disabled_strategies=list(raw.get("trading", {}).get("disabled_strategies", [])),
+        web_port=int(raw.get("web", {}).get("port", 8765)),
     )
     if not 1 <= cfg.universe_size <= 50:
         raise ValueError("universe.size は 1〜50 で指定してください（API登録上限は50銘柄）")

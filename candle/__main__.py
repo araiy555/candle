@@ -15,6 +15,11 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check", help="接続確認（トークン発行とランキング取得のみ）")
     sub.add_parser("collect", help="PUSH配信を受信して5分足を保存する")
+    sub.add_parser("paper", help="仮想売買と管理画面を起動する（実際の注文は出さない）")
+    p = sub.add_parser("backtest", help="保存済みの5分足で戦略別バックテストを行う")
+    p.add_argument("--source", help="データの出所で絞る（kabu_push / yahoo）")
+    p = sub.add_parser("import-yahoo", help="Yahoo Financeから5分足を取り込む（予備検証用）")
+    p.add_argument("symbols", nargs="*", help="銘柄コード（省略時は保存済みの監視銘柄）")
     p = sub.add_parser("replay", help="記録したJSONLから足を作り直す")
     p.add_argument("files", nargs="+")
     p = sub.add_parser("bars", help="保存済みの足を表示する")
@@ -46,9 +51,66 @@ def main(argv: list[str] | None = None) -> int:
             pass
         return 0
 
+    if args.cmd == "paper":
+        from datetime import time as dtime
+        from .collector import run_collector
+        from .engine import PaperEngine
+        from .patterns import STRATEGIES
+        from .risk import RiskManager
+        from .web import start_web
+
+        def factory(store):
+            h, m = map(int, cfg.exit_after.split(":"))
+            engine = PaperEngine(store, RiskManager(cfg.risk), slippage=cfg.slippage,
+                                 exit_after=dtime(h, m),
+                                 enabled={s.id for s in STRATEGIES} - set(cfg.disabled_strategies))
+            start_web(engine, cfg.web_port)
+            print(f"管理画面: http://localhost:{cfg.web_port}")
+            return engine
+
+        try:
+            asyncio.run(run_collector(cfg, engine_factory=factory))
+        except KeyboardInterrupt:
+            pass
+        return 0
+
     from .store import Store
     store = Store(cfg.db_path)
-    if args.cmd == "replay":
+    if args.cmd == "backtest":
+        from .backtest import format_report, run_backtest
+        data = {}
+        for sym in store.symbols_with_bars(cfg.bar_minutes):
+            bars = store.load_bars(sym, cfg.bar_minutes, source=args.source)
+            if bars:
+                data[sym] = bars
+        if not data:
+            print("5分足がありません。collect で蓄積するか import-yahoo で取り込んでください。")
+            return 1
+        days = len({b.start.date() for bars in data.values() for b in bars})
+        results = run_backtest(data, limits=cfg.risk, slippage=cfg.slippage)
+        store.delete_trades("backtest")
+        for trades in results.values():
+            for t in trades:
+                store.save_trade(t)
+        print(format_report(results, days, len(data)))
+    elif args.cmd == "import-yahoo":
+        from .yahoo import fetch
+        symbols = args.symbols
+        if not symbols:
+            wl = store.latest_watchlist()
+            symbols = [r["symbol"] for r in wl[1]] if wl else []
+        if not symbols:
+            print("銘柄コードを指定してください。例: python -m candle import-yahoo 7203 6758")
+            return 1
+        for sym in symbols:
+            try:
+                bars = fetch(sym, minutes=cfg.bar_minutes)
+            except Exception as e:
+                print(f"{sym}: 取得失敗 ({e})")
+                continue
+            store.save_bars(bars, source="yahoo", replace=False)
+            print(f"{sym}: {len(bars)} 本")
+    elif args.cmd == "replay":
         from .collector import replay
         for f in args.files:
             with open(f, encoding="utf-8") as fh:

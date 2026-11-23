@@ -1,0 +1,186 @@
+import json
+import urllib.request
+from datetime import datetime, time, timedelta
+
+from candle.backtest import format_report, run_backtest, run_symbol
+from candle.bars import JST
+from candle.engine import PaperEngine
+from candle.patterns import STRATEGY_BY_ID, Params
+from candle.risk import RiskLimits, RiskManager
+from candle.store import Store
+from candle.trade import Trade, summarize
+from candle.web import start_web
+from candle.yahoo import parse_chart
+
+from helpers import DOWN, make_bars
+
+T0 = datetime(2026, 11, 24, 10, 0, tzinfo=JST)
+HAMMER = DOWN + [(1004, 1005.5, 985, 1005)]
+
+
+def trade(entry=1000.0, stop=990.0, qty=100, sid="hammer", sym="T"):
+    return Trade("paper", sid, sym, T0, T0, entry, qty, stop, stop, high=entry)
+
+
+def test_trailing_steps_by_r():
+    t = trade()
+    assert not t.trail(1009) and t.stop == 990          # +1R未満は動かさない
+    assert t.trail(1010) and t.stop == 1000             # +1R → 建値
+    assert t.trail(1025) and t.stop == 1010             # +2R → +1R
+    assert t.trail(1030) and t.stop == 1020             # +3R → +2R
+    assert t.trail(1075) and t.stop == 1060             # 以降も追従
+    assert not t.trail(1040) and t.stop == 1060         # 下げても戻さない
+    t.close(T0 + timedelta(minutes=30), 1060, "トレーリング")
+    assert t.pnl() == 6000 and t.r_multiple() == 6
+
+
+def test_summarize_stats():
+    ts = [trade(), trade(), trade()]
+    for t, px in zip(ts, (1030, 990, 990)):
+        t.close(T0 + timedelta(minutes=10), px, "x")
+    s = summarize(ts + [trade()])                        # 保有中の1件は数えない
+    assert s["trades"] == 3 and abs(s["win_rate"] - 1 / 3) < 1e-9
+    assert s["pf"] == 1.5 and round(s["expectancy"]) == 333 and round(s["expectancy_r"], 2) == 0.33
+    assert summarize([])["pf"] is None
+
+
+def test_risk_limits():
+    rm = RiskManager(RiskLimits(total_cap=300_000, per_symbol_cap=200_000, daily_max_loss=5_000))
+    assert rm.check_entry("hammer", "A", 1000, 990, []) == (0, "API切断中")
+    rm.feed_ok = True
+    assert rm.check_entry("hammer", "A", 1000, 990, []) == (200, "entry")
+    held = [trade(sym="A", qty=200)]
+    assert rm.check_entry("hammer", "A", 1000, 990, held)[1] == "同一戦略で保有中"
+    # 別戦略でも同一銘柄の上限は共有する
+    assert rm.check_entry("tweezer_bottom", "A", 1000, 990, held)[1] == "資金上限を超える"
+    # 別銘柄は総額上限の残り（10万円）まで
+    assert rm.check_entry("hammer", "B", 1000, 990, held) == (100, "entry")
+    assert rm.check_entry("hammer", "C", 6000, 5950, [])[1] == "資金上限を超える"   # 1単元が買えない
+    assert rm.check_entry("hammer", "B", 1000, 999.5, [])[1] == "損切り幅が小さすぎる"
+    assert rm.check_entry("hammer", "B", 1000, 950, [])[1] == "損切り幅が大きすぎる"
+    rm.realized_today = -5_000
+    assert rm.check_entry("hammer", "B", 1000, 990, [])[1] == "1日の最大損失に到達"
+    rm.realized_today, rm.halted = 0, True
+    assert rm.check_entry("hammer", "B", 1000, 990, [])[1] == "緊急停止中"
+
+
+def bt(after, **kw):
+    return run_symbol(make_bars(HAMMER + after), STRATEGY_BY_ID["hammer"], Params(),
+                      RiskLimits(), slippage=0.0, **kw)
+
+
+def test_backtest_initial_stop():
+    (t,) = bt([(1006, 1008, 1000, 1002), (1002, 1003, 980, 982)])
+    assert t.entry_price == 1006 and t.initial_stop == 985       # 次の足の始値で買う
+    assert t.exit_price == 985 and t.exit_reason == "初期損切り"
+
+
+def test_backtest_gap_below_stop_fills_at_open():
+    (t,) = bt([(1006, 1008, 1000, 1002), (975, 978, 970, 972)])
+    assert t.exit_price == 975
+
+
+def test_backtest_trailing_exit():
+    # R=21。+2R(1048)到達で損切りは+1R(1027)へ。その後の下落で決済。
+    (t,) = bt([(1006, 1030, 1005, 1028), (1028, 1050, 1027, 1048), (1048, 1049, 1020, 1022)])
+    assert t.exit_reason == "トレーリング" and t.exit_price == 1027 and t.r_multiple() == 1
+
+
+def test_backtest_time_exit_and_no_late_entry():
+    (t,) = bt([(1006, 1008, 1000, 1002), (1002, 1004, 1001, 1003)], exit_after=time(9, 40))
+    assert t.exit_reason == "時間決済" and t.exit_price == 1003
+    assert bt([(1006, 1008, 1000, 1002)], exit_after=time(9, 30)) == []   # 時刻以降は買わない
+
+
+def test_backtest_report_runs_all_strategies():
+    res = run_backtest({"T": make_bars(HAMMER + [(1006, 1008, 1000, 1002), (1002, 1003, 980, 982)])})
+    assert len(res["hammer"]) == 1 and set(res) == set(STRATEGY_BY_ID)
+    assert "ハンマー" in format_report(res, 1, 1)
+
+
+def engine(**limits):
+    store = Store(":memory:")
+    rm = RiskManager(RiskLimits(**limits))
+    rm.feed_ok = True
+    return PaperEngine(store, rm, slippage=0.0), store
+
+
+def feed_hammer(e, sym="T"):
+    bars = make_bars(HAMMER, sym)
+    for b in bars:
+        e.on_bar(b)
+    return bars[-1].end
+
+
+def test_paper_entry_trail_and_exit():
+    e, store = engine()
+    t0 = feed_hammer(e)
+    e.on_price("T", 1006, t0 + timedelta(seconds=3))            # 次の約定で仮想買い
+    (t,) = e.open
+    assert (t.strategy_id, t.qty, t.entry_price, t.stop) == ("hammer", 400, 1006, 985)
+    e.on_price("T", 1048, t0 + timedelta(minutes=5))            # +2R → 損切りを+1Rへ
+    assert t.stop == 1027
+    e.on_clock(t0 + timedelta(minutes=6))
+    pos = e.snapshot["positions"][0]
+    assert pos["stop"] == 1027 and pos["initial_stop"] == 985 and pos["pnl"] == 42 * 400
+    e.on_price("T", 1026, t0 + timedelta(minutes=8))
+    assert e.open == [] and e.risk.realized_today == 20 * 400
+    (done,) = store.load_trades("paper")
+    assert done.exit_reason == "トレーリング"
+    e.on_clock(t0 + timedelta(minutes=9))
+    stats = {s["strategy"]: s for s in e.snapshot["stats"]}
+    assert stats["ハンマー"]["trades"] == 1 and stats["毛抜き底"]["trades"] == 0
+    assert e.snapshot["signals"][0]["action"] == "entry"
+
+
+def test_paper_blocks_when_halted_and_time_exit():
+    e, store = engine()
+    e.risk.halted = True
+    t0 = feed_hammer(e)
+    e.on_price("T", 1006, t0)
+    assert e.open == [] and store.recent_signals("paper")[0]["action"] == "緊急停止中"
+    e.risk.halted = False
+    feed_hammer(e, "U")
+    e.on_price("U", 1006, t0)
+    assert len(e.open) == 1
+    e.on_clock(t0.replace(hour=15, minute=20))                  # 持ち越さない
+    assert e.open == [] and store.load_trades("paper")[0].exit_reason == "時間決済"
+
+
+def test_paper_restores_open_positions_after_restart():
+    e, store = engine()
+    t0 = feed_hammer(e)
+    e.on_price("T", 1006, t0)
+    e2 = PaperEngine(store, e.risk, slippage=0.0)
+    assert len(e2.open) == 1 and e2.open[0].id == e.open[0].id
+
+
+def test_web_serves_state_and_kill_switch():
+    e, _ = engine()
+    e.on_clock(T0)
+    srv = start_web(e, 0)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        assert "candle" in urllib.request.urlopen(base + "/").read().decode()
+        assert json.load(urllib.request.urlopen(base + "/api/state"))["halted"] is False
+        urllib.request.urlopen(urllib.request.Request(base + "/api/halt", method="POST"))
+        assert e.risk.halted is True
+        bad = urllib.request.Request(base + "/api/resume", method="POST",
+                                     headers={"Origin": "http://evil.example"})
+        try:
+            urllib.request.urlopen(bad)
+        except Exception:
+            pass
+        assert e.risk.halted is True                             # 他サイトからの操作は拒否
+    finally:
+        srv.shutdown()
+
+
+def test_yahoo_parse_filters_off_session():
+    ts = lambda h, m: int(datetime(2026, 11, 24, h, m, tzinfo=JST).timestamp())
+    payload = {"chart": {"result": [{"timestamp": [ts(9, 0), ts(9, 5), ts(15, 30), ts(9, 10)],
+               "indicators": {"quote": [{"open": [1, 2, 3, None], "high": [2, 3, 4, None],
+                                         "low": [0.5, 1, 2, None], "close": [1.5, 2.5, 3.5, None],
+                                         "volume": [100, 200, 300, None]}]}}]}}
+    bars = parse_chart("7203", payload)
+    assert [b.start.strftime("%H:%M") for b in bars] == ["09:00", "09:05"]
