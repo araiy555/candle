@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+# 実行時データ・秘密情報はコミットしない
+data/
+config.toml
+.env
+*.log

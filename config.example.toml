@@ -1,0 +1,25 @@
+# config.toml にコピーして使います（config.toml は .gitignore 済み）。
+# APIパスワードはここに書かず、環境変数 KABU_API_PASSWORD に設定してください。
+
+[api]
+# 本番 18080 / 検証 18081
+port = 18080
+host = "localhost"
+
+[universe]
+# 監視銘柄数（登録上限50のうち、保有銘柄用に予備枠を残す）
+size = 45
+# ランキングの市場区分: T=東証全体, TP=プライム, ALL=全市場
+exchange_division = "T"
+# 固定リストを使う場合はここに銘柄コードを書く（空ならランキングから選定）
+symbols = []
+# 除外したい銘柄コード（ETFなど）
+exclude = []
+
+[data]
+dir = "data"
+# 受信メッセージ（必要項目のみ）をJSONLで保存する。再生・検証用。
+record_raw = true
+
+[bars]
+minutes = 5
