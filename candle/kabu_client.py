@@ -25,6 +25,7 @@ class KabuClient:
         self._lock = threading.Lock()
         self._timeout = timeout
         self._session = requests.Session()
+        self._session.trust_env = False  # localhost宛てなのでOSのプロキシ設定を使わない
 
     def _throttle(self) -> None:
         with self._lock:
