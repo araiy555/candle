@@ -28,18 +28,20 @@ function Val($e) {
   return $null
 }
 function Dump($e, $depth) {
-  if ($depth -gt 6 -or $script:lines -gt 250) { return }
+  if ($depth -gt 7 -or $script:lines -gt 300) { return }
   $script:lines++
   $c = $e.Current
   ('  ' * $depth) + $c.ControlType.ProgrammaticName.Replace('ControlType.', '') + ' name=[' + $c.Name + '] id=[' + $c.AutomationId + '] class=[' + $c.ClassName + '] value=[' + (Val $e) + ']'
   foreach ($k in (Children $e)) { Dump $k ($depth + 1) }
 }
 
-# kabuステーション本体と、その中（または独立）のチャート画面を探す
+# kabuステーション本体と、チャート画面（題名が「チャート:3436/T」の形のもの）を探す。
+# ツールバーの「チャート」ボタンなどを拾わないよう、題名に「:」を含むものだけを対象にする。
+function IsChart($name) { return ($name -match '^チャート\s*[:：]') }
 $charts = @(); $main = $null
 foreach ($w in (Children $AE::RootElement)) {
   $n = $w.Current.Name
-  if ($n -like 'チャート*') { $charts += $w }
+  if (IsChart $n) { $charts += $w }
   if ($n -like 'kabuステーション*') { $main = $w }
 }
 if (-not $main -and $charts.Count -eq 0) { 'NG:kabuステーションの画面が見つかりません。起動しているか確認してください。'; exit 2 }
@@ -47,22 +49,34 @@ if ($main) {
   $queue = @(@($main, 0))
   while ($queue.Count -gt 0) {
     $item = $queue[0]; $queue = @($queue | Select-Object -Skip 1)
-    if ($item[1] -ge 4) { continue }
+    if ($item[1] -ge 6) { continue }
     foreach ($k in (Children $item[0])) {
-      if ($k.Current.Name -like 'チャート*') { $charts += $k } else { $queue += , @($k, ($item[1] + 1)) }
+      if (IsChart $k.Current.Name) { $charts += $k } else { $queue += , @($k, ($item[1] + 1)) }
     }
   }
 }
+
+if ($inspect) {
+  'チャート画面の候補: ' + $charts.Count
+  $script:lines = 0
+  foreach ($c in $charts) { '--- ' + $c.Current.Name; Dump $c 0 }
+  if ($charts.Count -eq 0 -and $main) { '--- 本体（上位の階層のみ）'; Dump $main 3 }
+  exit 0
+}
 if ($charts.Count -eq 0) { 'NG:チャート画面が見つかりません。kabuステーションでチャートを1つ開いておいてください。'; exit 3 }
-$chart = $charts[0]
 
-if ($inspect) { $script:lines = 0; Dump $chart 0; exit 0 }
-
-# チャート画面の中の銘柄コード欄（「3436/T」のような値が入った入力欄）を探す
+# チャート画面の中の銘柄コード欄（「3436/T」のような値が入った入力欄）を探す。
+# 入力欄そのもの（Edit）を優先し、無ければ同じ値を持つ他の部品（コンボボックスなど）を使う。
 $edit = $null
-foreach ($e in $chart.FindAll($scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $editType)))) {
-  $v = Val $e
-  if ($v -match '^[0-9A-Za-z]{4,5}(/[0-9A-Za-z]+)?$') { $edit = $e; break }
+foreach ($chart in $charts) {
+  $cands = @()
+  foreach ($e in $chart.FindAll($scope::Descendants, $all)) {
+    $v = Val $e
+    if ($v -match '^[0-9A-Za-z]{4,5}/[0-9A-Za-z]+$') { $cands += $e }
+  }
+  foreach ($e in $cands) { if ($e.Current.ControlType -eq $editType) { $edit = $e; break } }
+  if (-not $edit -and $cands.Count -gt 0) { $edit = $cands[0] }
+  if ($edit) { break }
 }
 if (-not $edit) { 'NG:チャート画面の銘柄コード欄が見つかりません。'; exit 4 }
 
@@ -74,7 +88,12 @@ Start-Sleep -Milliseconds 200
 # 入力先がその銘柄コード欄であることを確認できた場合だけキーを送る
 $focused = $AE::FocusedElement
 $same = $false
-try { $same = [System.Windows.Automation.Automation]::Compare($focused.GetRuntimeId(), $edit.GetRuntimeId()) } catch {}
+try {
+  $w = [System.Windows.Automation.TreeWalker]::RawViewWalker; $f = $focused
+  for ($i = 0; $i -lt 3 -and $f -and -not $same; $i++) {   # 欄そのもの、またはその内側にフォーカスがあること
+    $same = [System.Windows.Automation.Automation]::Compare($f.GetRuntimeId(), $edit.GetRuntimeId()); $f = $w.GetParent($f)
+  }
+} catch {}
 if (-not $same) { 'NG:銘柄コード欄を選択できなかったため、何も入力しませんでした。'; exit 5 }
 
 $set = $false
@@ -95,7 +114,7 @@ def show_chart(symbol: str, inspect: bool = False) -> tuple[bool, str]:
         r = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", _SCRIPT],
             env={**os.environ, "CANDLE_CODE": symbol, "CANDLE_INSPECT": "1" if inspect else "0"},
-            capture_output=True, timeout=30,
+            capture_output=True, timeout=60,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception as e:
         return False, f"実行に失敗しました: {e}"

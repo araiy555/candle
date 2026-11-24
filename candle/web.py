@@ -172,6 +172,10 @@ def start_web(engine, port: int = 8765) -> ThreadingHTTPServer:
                     return self._send(b"bad symbol", "text/plain", 400)
                 self._send(json.dumps(engine.chart_data(symbol), ensure_ascii=False).encode("utf-8"),
                            "application/json")
+            elif self.path == "/kabu-inspect":
+                from .kabuwin import show_chart
+                _, text = show_chart("0000", inspect=True)
+                self._send(text.encode("utf-8"), "text/plain; charset=utf-8")
             elif self.path == "/api/state":
                 self._send(json.dumps(engine.snapshot, ensure_ascii=False).encode("utf-8"),
                            "application/json")
