@@ -10,7 +10,7 @@ from .trade import Trade
 class RiskLimits:
     total_cap: float = 1_000_000      # 総投資上限（円）
     per_symbol_cap: float = 500_000   # 1銘柄あたりの投資上限（円）
-    daily_max_loss: float = 20_000    # 1日の最大損失（円）。到達で新規停止
+    daily_max_loss: float = 10_000    # 1日の最大損失（円）。到達で新規停止
     unit: int = 100                   # 売買単位
     min_risk_pct: float = 0.001       # 1Rが小さすぎるサインは見送る（価格比）
     max_risk_pct: float = 0.03        # 1Rが大きすぎるサインは見送る（価格比）

@@ -38,6 +38,8 @@ exit_after = "15:20"       # この時刻以降は新規停止・全決済（持
 # 止めたい戦略ID: tweezer_bottom, bullish_engulfing, hammer, morning_star,
 #                 piercing_line, bullish_harami, double_bottom
 disabled_strategies = []
+# テスト（仮想売買）・本番で売買する戦略ID
+strategies = ["tweezer_bottom"]
 
 [web]
 port = 8765                # 管理画面 http://localhost:8765 （このPCからのみ閲覧可）
@@ -50,3 +52,12 @@ sound = true               # 通知音
 copy_code = true           # 通知と同時に銘柄コードをコピーする（kabuステーションに貼り付け用）
 # DiscordまたはSlackのWebhook URLを入れるとスマホにも届く（空なら使わない）
 webhook_url = ""
+
+[live]
+# 本番（実際に発注）の注文方法
+exchange = 9               # 9=SOR, 27=東証+
+margin_trade_type = 3      # 1=制度信用, 2=一般信用（長期）, 3=一般信用（デイトレ）
+account_type = 4           # 4=特定口座, 2=一般口座
+# server=証券会社側に逆指値を置く（PCが止まっても損切りが残る）
+# client=このプログラムが価格を監視して成行で決済する
+stop_method = "server"

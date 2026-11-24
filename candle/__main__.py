@@ -8,6 +8,49 @@ import sys
 from .config import load_config
 
 
+def order_check(cfg) -> int:
+    """検証用環境に、本番と同じ形の注文を送って応答を表示する。実際の注文にはならない。"""
+    import getpass
+    import json
+    import os
+
+    from .broker import KabuBroker
+    from .kabu_client import KabuClient
+
+    pw = os.environ.get("KABU_API_PASSWORD_TEST") or getpass.getpass("検証用のAPIパスワード: ")
+    client = KabuClient(f"http://{cfg.host}:18081/kabusapi", pw)
+    broker = KabuBroker(client, cfg.live)
+    try:
+        client.token()
+    except Exception as e:
+        print(f"検証用環境（ポート18081）に接続できません: {e}")
+        return 1
+    print("検証用環境に接続しました。本番と同じ形の注文を送ります（実際の注文にはなりません）。\n")
+    steps = [("信用新規買い・成行", broker.buy_body("7203", 100)),
+             ("信用返済売り・逆指値", broker.stop_body("7203", 100, 2000)),
+             ("信用返済売り・成行", broker.close_body("7203", 100))]
+    ok, order_id = True, None
+    for label, body in steps:
+        try:
+            order_id = client.send_order(body)
+            print(f"[受付] {label}: 注文番号 {order_id}")
+        except Exception as e:
+            ok = False
+            print(f"[拒否] {label}: {e}")
+            print("       送った内容: " + json.dumps(body, ensure_ascii=False))
+    for label, call in (("取消", lambda: client.cancel_order(order_id or "20200529A01N06848002")),
+                        ("注文照会", lambda: client.orders()),
+                        ("建玉照会", lambda: client.positions(product=2))):
+        try:
+            res = call()
+            print(f"[受付] {label}" + (f": {len(res)} 件" if isinstance(res, list) else ""))
+        except Exception as e:
+            ok = False
+            print(f"[拒否] {label}: {e}")
+    print("\nすべて受け付けられました。" if ok else "\n拒否された項目があります。上の内容を開発者に伝えてください。")
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="candle", description="kabuステーションAPI ローソク足システム")
     ap.add_argument("--config", help="設定ファイル（既定: config.toml）")
@@ -20,7 +63,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check", help="接続確認（トークン発行とランキング取得のみ）")
     sub.add_parser("collect", help="PUSH配信を受信して5分足を保存する")
     sub.add_parser("watch", help="売買代金上位50銘柄を監視し、サインが出たら通知する（売買なし）")
-    sub.add_parser("paper", help="仮想売買と管理画面を起動する（実際の注文は出さない）")
+    sub.add_parser("paper", help="テスト: 仮想売買と管理画面を起動する（実際の注文は出さない）")
+    p = sub.add_parser("live", help="本番: 実際に発注する自動売買を起動する")
+    p.add_argument("--yes", action="store_true", help="開始前の確認を省く")
+    sub.add_parser("order-check", help="検証用環境（ポート18081）に注文を送り、形式が受け付けられるか確かめる")
     p = sub.add_parser("backtest", help="保存済みの5分足で戦略別バックテストを行う")
     p.add_argument("--source", help="データの出所で絞る（kabu_push / yahoo）")
     p = sub.add_parser("import-yahoo", help="Yahoo Financeから5分足を取り込む（予備検証用）")
@@ -87,38 +133,65 @@ def main(argv: list[str] | None = None) -> int:
             pass
         return 0
 
-    if args.cmd in ("paper", "watch"):
+    if args.cmd == "order-check":
+        return order_check(cfg)
+
+    if args.cmd in ("paper", "watch", "live"):
         from datetime import time as dtime
         from .collector import run_collector
         from .engine import PaperEngine
+        from .kabuwin import show_chart_async
         from .notify import Notifier
         from .patterns import STRATEGIES
         from .risk import RiskManager
+        from .settings import TradeSettings
         from .web import start_web
 
-        watch = args.cmd == "watch"
-        notifier = Notifier(cfg.notify_desktop, cfg.notify_sound, cfg.webhook_url, cfg.notify_copy_code)
-        if watch:
-            cfg.universe_size = 50   # 売買しないので予備枠は不要。登録上限いっぱいまで監視する
-            enabled = set(cfg.watch_strategies)
-            unknown = enabled - {s.id for s in STRATEGIES}
-            if unknown:
-                print(f"notify.strategies に不明な戦略IDがあります: {sorted(unknown)}")
+        watch, live = args.cmd == "watch", args.cmd == "live"
+        notifier = Notifier(cfg.notify_desktop, cfg.notify_sound, cfg.webhook_url,
+                            cfg.notify_copy_code)
+        cfg.universe_size = 50   # 登録上限いっぱいまで監視する
+        enabled = set(cfg.watch_strategies if watch else cfg.trade_strategies)
+        unknown = enabled - {s.id for s in STRATEGIES}
+        if unknown:
+            print(f"設定に不明な戦略IDがあります: {sorted(unknown)}")
+            return 1
+        if live:
+            if cfg.port != 18080:
+                print("本番モードは本番用ポート（18080）でのみ動かせます。config.toml の port を確認してください。")
                 return 1
-        else:
-            enabled = {s.id for s in STRATEGIES} - set(cfg.disabled_strategies)
+            if not args.yes:
+                print("=" * 60)
+                print("本番モードです。実際の資金で信用取引の注文を出します。")
+                print("=" * 60)
+                try:
+                    answer = input("開始する場合は yes と入力して Enter: ")
+                except EOFError:
+                    answer = ""
+                if answer.strip().lower() != "yes":
+                    print("中止しました。")
+                    return 1
 
         def factory(store):
             h, m = map(int, cfg.exit_after.split(":"))
-            engine = PaperEngine(store, RiskManager(cfg.risk), slippage=cfg.slippage,
-                                 exit_after=dtime(h, m), enabled=enabled,
-                                 trade_enabled=not watch, notify=notifier.send,
-                                 notify_ids=set(cfg.watch_strategies))
-            from .kabuwin import show_chart_async
+            common = dict(slippage=cfg.slippage, exit_after=dtime(h, m), enabled=enabled,
+                          notify=notifier.send, notify_ids=set(cfg.watch_strategies),
+                          settings=TradeSettings.load(cfg.data_dir / "settings.json"))
+            if live:
+                from .broker import KabuBroker
+                from .kabu_client import KabuClient
+                from .live import LiveEngine
+                # 発注用の接続は受信用とは別に持つ（応答待ちを短くして受信を止めないため）
+                client = KabuClient(cfg.rest_url, cfg.api_password, timeout=5.0)
+                engine = LiveEngine(store, RiskManager(cfg.risk), broker=KabuBroker(client, cfg.live),
+                                    stop_method=cfg.live.stop_method, **common)
+            else:
+                engine = PaperEngine(store, RiskManager(cfg.risk), trade_enabled=not watch, **common)
             flag = cfg.data_dir / "auto_chart.txt"
             engine.on_auto_chart = show_chart_async
             engine.auto_chart = flag.exists() and flag.read_text().strip() == "1"
-            start_web(engine, cfg.web_port, flag)
+            start_web(engine, cfg.web_port, cfg.data_dir)
+            print(f"モード: {engine.mode_label if engine.trade_enabled else '通知のみ'}")
             print(f"管理画面: http://localhost:{cfg.web_port}")
             return engine
 

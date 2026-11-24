@@ -21,7 +21,7 @@ table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
 th,td{padding:5px 8px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
 th{color:var(--mut);font-weight:500;font-size:12px}th:first-child,td:first-child,.l{text-align:left}
 tr:last-child td{border-bottom:0}.pos{color:var(--up)}.neg{color:var(--down)}.mut{color:var(--mut)}
-button{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button{font:inherit;white-space:nowrap;padding:6px 14px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
 button.stop{background:#c0392b;border-color:#c0392b;color:#fff;font-weight:600}
 .kpis{display:flex;flex-wrap:wrap;gap:20px}.kpis div span{display:block;color:var(--mut);font-size:12px}.kpis b{font-size:18px;white-space:nowrap}
 .watch{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px}
@@ -37,17 +37,33 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .chart{position:relative;padding:8px 8px 12px}.chart svg{display:block;width:100%;height:360px}
 .tip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;font-variant-numeric:tabular-nums}
 .note{color:var(--mut);font-size:12px;padding:0 16px 12px}
+.live{background:#c0392b;border-color:#c0392b;color:#fff;font-weight:600}
+#warn{border-color:var(--warn)}#warn li{margin:2px 0}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px 20px;align-items:end}
+.form label{display:block;font-size:12px;color:var(--mut);margin-bottom:4px}
+.form .row{display:flex;gap:6px}.form select,.form input{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);min-width:0}
+.form select{flex:1}.form input{width:110px;text-align:right}.form input:disabled{opacity:.4}
+[hidden]{display:none!important}
 </style></head><body>
 <header><h1>candle</h1><span class="pill" id="mode"></span><span class="pill" id="feed"></span>
 <span class="pill" id="halt"></span><span class="mut" id="time"></span>
 <label class="pill" style="cursor:pointer"><input type="checkbox" id="auto" style="vertical-align:-2px"> サインが出たらkabuステーションのチャートを自動で切り替える</label>
-<span style="flex:1"></span><button id="btn"></button></header>
+<span style="flex:1"></span><button id="closeall" hidden>全ポジションを決済</button><button id="btn"></button></header>
 <main>
-<section><div class="kpis" id="kpis"></div></section>
-<section><h2>保有ポジション</h2><div id="positions"></div></section>
-<section><h2>戦略別成績</h2><div id="stats"></div></section>
+<section id="warn" hidden><h2>確認が必要です</h2><ul id="warnlist" style="margin:0;padding-left:20px"></ul></section>
+<section data-trade><div class="kpis" id="kpis"></div></section>
+<section data-trade><h2>売買設定</h2><div class="form">
+<div><label for="stop_mode">損切りライン</label><div class="row"><select id="stop_mode"><option value="pattern_low">パターンの安値</option><option value="percent">買値から一定率（%）下</option><option value="yen">買値から一定額（円）下</option></select><input id="stop_value" type="number" step="0.1" min="0"></div></div>
+<div><label for="trail_mode">トレーリングストップ</label><div class="row"><select id="trail_mode"><option value="r_step">リスク幅（R）ごとに引き上げ</option><option value="percent">高値から一定率（%）下に追従</option><option value="yen">高値から一定額（円）下に追従</option><option value="none">トレーリングなし</option></select><input id="trail_value" type="number" step="0.1" min="0"></div></div>
+<div><label for="per_trade_cap">1回の買いの上限（円）</label><div class="row"><input id="per_trade_cap" type="number" step="10000" min="0" style="width:100%"></div></div>
+<div><label for="total_cap">同時に持つ合計の上限（円）</label><div class="row"><input id="total_cap" type="number" step="10000" min="0" style="width:100%"></div></div>
+<div><label for="daily_max_loss">1日の最大損失（円）</label><div class="row"><input id="daily_max_loss" type="number" step="1000" min="0" style="width:100%"></div></div>
+<div><div class="row" style="align-items:center"><button id="save">設定を保存</button><span class="mut" id="savemsg" style="font-size:12px"></span></div></div>
+</div><div class="note" style="padding:10px 0 0">変更は次の買いから適用します。保有中のポジションの損切り・トレーリングは、買った時点の設定のままです。</div></section>
+<section data-trade><h2>保有ポジション</h2><div id="positions"></div></section>
+<section data-trade><h2>戦略別成績</h2><div id="stats"></div></section>
 <section><h2>検出されたサイン</h2><div id="signals"></div></section>
-<section><h2>取引履歴</h2><div id="history"></div></section>
+<section data-trade><h2>取引履歴</h2><div id="history"></div></section>
 <section><h2>監視銘柄</h2><div class="watch" id="watch"></div></section>
 </main>
 <dialog id="dlg"><div class="dh"><b id="dt"></b><button id="kabu">kabuステーションで表示</button><span class="mut" id="kmsg" style="font-size:12px"></span><button id="copy">銘柄コードをコピー</button>
@@ -68,11 +84,17 @@ function table(el,heads,rows,empty){
   $(el).innerHTML='<table><thead><tr>'+heads.map(h=>`<th>${h}</th>`).join('')+'</tr></thead><tbody>'+
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
-let halted=false,state=null,cur=null;
+let halted=false,state=null,cur=null,formLoaded=false;
+const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss'];
+function syncForm(){$('stop_value').disabled=$('stop_mode').value==='pattern_low';$('trail_value').disabled=!['percent','yen'].includes($('trail_mode').value)}
 async function load(){
   let d;try{d=await (await fetch('/api/state')).json()}catch(e){$('feed').innerHTML='<span class="ng">プログラム停止中</span>';return}
   if(!d.time){$('time').textContent='起動中…';return}
   halted=d.halted;state=d;$('auto').checked=!!d.auto_chart;
+  document.querySelectorAll('[data-trade]').forEach(e=>e.hidden=!d.trading);$('closeall').hidden=!d.trading;
+  $('mode').className='pill'+(d.live&&d.trading?' live':'');
+  $('warn').hidden=!(d.warnings&&d.warnings.length);$('warnlist').innerHTML=(d.warnings||[]).map(w=>`<li>${esc(w)}</li>`).join('');
+  if(!formLoaded&&d.settings){for(const k of FIELDS)$(k).value=d.settings[k];formLoaded=true;syncForm()}
   $('mode').textContent=d.mode;$('time').textContent=md(d.time)+' 更新';
   $('feed').innerHTML=d.feed_ok?'<span class="ok">API接続中</span>':'<span class="ng">API切断（新規停止）</span>';
   $('halt').innerHTML=d.halted?'<span class="ng">緊急停止中</span>':'<span class="ok">新規受付中</span>';
@@ -81,8 +103,8 @@ async function load(){
   $('kpis').innerHTML=[['含み損益',yen(unreal)+' 円'],['本日の確定損益',yen(d.realized_today)+' 円'],
     ['投資額 / 上限',n(d.exposure)+' / '+n(d.limits.total_cap)+' 円'],['1日の最大損失',n(d.limits.daily_max_loss)+' 円'],
     ['保有数',d.positions.length]].map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('');
-  table('positions',['戦略','銘柄','株数','サイン時刻','エントリー','現在値','初期損切り','現在の損切り','含み損益','R','保有時間'],
-    d.positions.map(p=>[esc(p.strategy),esc(p.symbol),n(p.qty),hm(p.signal_time),n(p.entry_price,1),n(p.price,1),n(p.initial_stop,1),
+  table('positions',['戦略','銘柄','状態','株数','サイン時刻','エントリー','現在値','初期損切り','現在の損切り','含み損益','R','保有時間'],
+    d.positions.map(p=>[esc(p.strategy),`<button class="link" data-sym="${esc(p.symbol)}">${esc(p.symbol)} ${esc(p.name||'')}</button>`,esc(p.state),n(p.qty),hm(p.signal_time),n(p.entry_price,1),n(p.price,1),n(p.initial_stop,1),
       n(p.stop,1),yen(p.pnl),rr(p.r),n(p.hold_min)+'分']),'保有ポジションはありません');
   table('stats',['戦略','取引数','勝率','PF','期待損益(円)','期待値(R)','合計損益(円)','平均保有'],
     d.stats.map(s=>[esc(s.strategy),s.trades,s.win_rate==null?'-':n(s.win_rate*100,1)+'%',s.pf==null?'-':n(s.pf,2),
@@ -147,6 +169,10 @@ document.addEventListener('click',async e=>{const k=e.target.closest('[data-kabu
 async function kabu(sym,msgEl){if(msgEl)msgEl.textContent='切り替え中…';try{const r=await (await fetch('/api/kabu-chart?symbol='+encodeURIComponent(sym),{method:'POST'})).json();
   if(msgEl)msgEl.textContent=r.ok?'':r.message;return r}catch(e){if(msgEl)msgEl.textContent='失敗しました'}}
 $('kabu').onclick=()=>kabu(cur,$('kmsg'));
+$('stop_mode').onchange=$('trail_mode').onchange=syncForm;
+$('save').onclick=async()=>{const body={};for(const k of FIELDS)body[k]=$(k).value;
+  try{const r=await (await fetch('/api/settings',{method:'POST',body:JSON.stringify(body)})).json();$('savemsg').textContent=r.message;if(r.ok)formLoaded=false}catch(e){$('savemsg').textContent='保存できませんでした'}};
+$('closeall').onclick=async()=>{if(!confirm('保有中のすべてのポジションを成行で決済します。よろしいですか？'))return;await fetch('/api/close-all',{method:'POST'});load()};
 $('auto').onchange=()=>fetch('/api/auto-chart?on='+($('auto').checked?1:0),{method:'POST'});
 $('close').onclick=()=>$('dlg').close();$('dlg').addEventListener('close',()=>{cur=null});
 $('dlg').addEventListener('click',e=>{if(e.target===$('dlg'))$('dlg').close()});
@@ -155,7 +181,10 @@ load();setInterval(load,2000);setInterval(chart,5000);
 </script></body></html>"""
 
 
-def start_web(engine, port: int = 8765, settings_path=None) -> ThreadingHTTPServer:
+def start_web(engine, port: int = 8765, data_dir=None) -> ThreadingHTTPServer:
+    flag_path = data_dir / "auto_chart.txt" if data_dir else None
+    settings_file = data_dir / "settings.json" if data_dir else None
+
     class Handler(BaseHTTPRequestHandler):
         def _send(self, body: bytes, ctype: str, status: int = 200):
             self.send_response(status)
@@ -181,7 +210,8 @@ def start_web(engine, port: int = 8765, settings_path=None) -> ThreadingHTTPServ
             elif self.path == "/api/state":
                 state = dict(engine.snapshot)
                 if state:   # 切り替え操作はすぐ画面に反映する
-                    state.update(auto_chart=engine.auto_chart, halted=engine.risk.halted)
+                    state.update(auto_chart=engine.auto_chart, halted=engine.risk.halted,
+                                 settings=vars(engine.settings))
                 self._send(json.dumps(state, ensure_ascii=False).encode("utf-8"),
                            "application/json")
             else:
@@ -199,11 +229,24 @@ def start_web(engine, port: int = 8765, settings_path=None) -> ThreadingHTTPServ
                                              ensure_ascii=False).encode("utf-8"), "application/json")
             if self.path.startswith("/api/auto-chart?on="):
                 engine.auto_chart = self.path.endswith("=1")
-                if settings_path:
+                if flag_path:
                     try:
-                        settings_path.write_text("1" if engine.auto_chart else "0")
+                        flag_path.write_text("1" if engine.auto_chart else "0")
                     except OSError:
                         pass
+                return self._send(b"{}", "application/json")
+            if self.path == "/api/settings":
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    engine.update_settings(json.loads(self.rfile.read(n) or b"{}"))
+                    engine.settings.save(settings_file)
+                    res = {"ok": True, "message": "保存しました。次の買いから適用します。"}
+                except (ValueError, TypeError) as e:
+                    res = {"ok": False, "message": str(e)}
+                return self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"),
+                                  "application/json")
+            if self.path == "/api/close-all":
+                engine.close_all = True
                 return self._send(b"{}", "application/json")
             if self.path == "/api/halt":
                 engine.risk.halted = True

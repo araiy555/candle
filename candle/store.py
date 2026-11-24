@@ -52,6 +52,20 @@ class Store:
         self.conn = sqlite3.connect(str(path))
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        # 旧版で作ったDBに、後から増えた列を足す
+        have = {r[1] for r in self.conn.execute("PRAGMA table_info(trades)")}
+        for col, decl in (("trail_mode", "TEXT NOT NULL DEFAULT 'r_step'"),
+                          ("trail_value", "REAL NOT NULL DEFAULT 0"), ("pattern_low", "REAL"),
+                          ("state", "TEXT NOT NULL DEFAULT ''"),
+                          ("entry_order", "TEXT NOT NULL DEFAULT ''"),
+                          ("stop_order", "TEXT NOT NULL DEFAULT ''"),
+                          ("exit_order", "TEXT NOT NULL DEFAULT ''"), ("server_stop", "REAL"),
+                          ("tick_group", "TEXT NOT NULL DEFAULT '10000'"),
+                          ("exit_qty", "INTEGER NOT NULL DEFAULT 0"),
+                          ("exit_value", "REAL NOT NULL DEFAULT 0")):
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
+        self.conn.commit()
 
     def save_bars(self, bars: list[Bar], source: str = "kabu_push",
                   replace: bool = True) -> None:
@@ -116,35 +130,42 @@ class Store:
         keys = ("strategy_id", "symbol", "time", "price", "pattern_low", "action")
         return [dict(zip(keys, r)) for r in rows]
 
+    _TRADE_COLS = ("mode", "strategy_id", "symbol", "signal_time", "entry_time", "entry_price",
+                   "qty", "initial_stop", "stop", "high", "exit_time", "exit_price", "exit_reason",
+                   "trail_mode", "trail_value", "pattern_low", "state", "entry_order",
+                   "stop_order", "exit_order", "server_stop", "tick_group", "exit_qty",
+                   "exit_value")
+    _TIME_COLS = ("signal_time", "entry_time", "exit_time")
+
     def save_trade(self, t: Trade) -> None:
-        iso = lambda d: d.isoformat() if d else None
-        vals = (t.mode, t.strategy_id, t.symbol, iso(t.signal_time), iso(t.entry_time),
-                t.entry_price, t.qty, t.initial_stop, t.stop, t.high, iso(t.exit_time),
-                t.exit_price, t.exit_reason)
+        vals = tuple((getattr(t, c).isoformat() if getattr(t, c) else None)
+                     if c in self._TIME_COLS else getattr(t, c) for c in self._TRADE_COLS)
         if t.id is None:
             cur = self.conn.execute(
-                "INSERT INTO trades (mode,strategy_id,symbol,signal_time,entry_time,entry_price,"
-                "qty,initial_stop,stop,high,exit_time,exit_price,exit_reason) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", vals)
+                f"INSERT INTO trades ({','.join(self._TRADE_COLS)}) "
+                f"VALUES ({','.join('?' * len(self._TRADE_COLS))})", vals)
             t.id = cur.lastrowid
         else:
             self.conn.execute(
-                "UPDATE trades SET mode=?,strategy_id=?,symbol=?,signal_time=?,entry_time=?,"
-                "entry_price=?,qty=?,initial_stop=?,stop=?,high=?,exit_time=?,exit_price=?,"
-                "exit_reason=? WHERE id=?", vals + (t.id,))
+                f"UPDATE trades SET {','.join(c + '=?' for c in self._TRADE_COLS)} WHERE id=?",
+                vals + (t.id,))
         self.conn.commit()
 
     def load_trades(self, mode: str, open_only: bool = False) -> list[Trade]:
-        sql = ("SELECT id,mode,strategy_id,symbol,signal_time,entry_time,entry_price,qty,"
-               "initial_stop,stop,high,exit_time,exit_price,exit_reason FROM trades WHERE mode=?")
+        sql = f"SELECT id,{','.join(self._TRADE_COLS)} FROM trades WHERE mode=?"
         if open_only:
             sql += " AND exit_time IS NULL"
-        dt = lambda v: datetime.fromisoformat(v) if v else None
-        return [Trade(id=r[0], mode=r[1], strategy_id=r[2], symbol=r[3], signal_time=dt(r[4]),
-                      entry_time=dt(r[5]), entry_price=r[6], qty=r[7], initial_stop=r[8],
-                      stop=r[9], high=r[10], exit_time=dt(r[11]), exit_price=r[12],
-                      exit_reason=r[13])
-                for r in self.conn.execute(sql + " ORDER BY id", (mode,))]
+        out = []
+        for r in self.conn.execute(sql + " ORDER BY id", (mode,)):
+            kw = dict(zip(self._TRADE_COLS, r[1:]))
+            for c in self._TIME_COLS:
+                kw[c] = datetime.fromisoformat(kw[c]) if kw[c] else None
+            out.append(Trade(id=r[0], **kw))
+        return out
+
+    def delete_trade(self, trade_id: int) -> None:
+        self.conn.execute("DELETE FROM trades WHERE id=?", (trade_id,))
+        self.conn.commit()
 
     def delete_trades(self, mode: str) -> None:
         self.conn.execute("DELETE FROM trades WHERE mode=?", (mode,))

@@ -5,6 +5,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .broker import LiveConfig
 from .risk import RiskLimits
 
 
@@ -29,6 +30,8 @@ class Config:
     notify_sound: bool = True
     webhook_url: str = ""
     notify_copy_code: bool = True
+    live: LiveConfig = field(default_factory=LiveConfig)
+    trade_strategies: list[str] = field(default_factory=lambda: ["tweezer_bottom"])
 
     @property
     def rest_url(self) -> str:
@@ -80,6 +83,8 @@ def load_config(path: str | Path | None = None) -> Config:
         notify_sound=bool(raw.get("notify", {}).get("sound", True)),
         webhook_url=str(raw.get("notify", {}).get("webhook_url", "")),
         notify_copy_code=bool(raw.get("notify", {}).get("copy_code", True)),
+        live=LiveConfig(**raw.get("live", {})),
+        trade_strategies=list(raw.get("trading", {}).get("strategies", ["tweezer_bottom"])),
     )
     if not 1 <= cfg.universe_size <= 50:
         raise ValueError("universe.size は 1〜50 で指定してください（API登録上限は50銘柄）")

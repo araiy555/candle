@@ -71,5 +71,27 @@ class KabuClient:
                             params={"Type": str(type_), "ExchangeDivision": exchange_division})
         return res.get("Ranking") or []
 
+    def symbol_info(self, symbol: str, exchange: int = 1) -> dict:
+        return self._request("GET", f"/symbol/{symbol}@{exchange}")
+
+    # --- 発注系（実際のお金が動く） -------------------------------------------
+    def send_order(self, body: dict) -> str:
+        """注文を送り、受付注文番号を返す。受け付けられなかった場合は例外。"""
+        res = self._request("POST", "/sendorder", json=body)
+        if res.get("Result") != 0 or not res.get("OrderId"):
+            raise KabuApiError(200, str(res))
+        return res["OrderId"]
+
+    def cancel_order(self, order_id: str) -> None:
+        res = self._request("PUT", "/cancelorder", json={"OrderId": order_id})
+        if res.get("Result") != 0:
+            raise KabuApiError(200, str(res))
+
+    def orders(self, **params) -> list[dict]:
+        return self._request("GET", "/orders", params={"product": 0, **params}) or []
+
+    def positions(self, product: int = 0) -> list[dict]:
+        return self._request("GET", "/positions", params={"product": product}) or []
+
     def soft_limit(self) -> dict:
         return self._request("GET", "/apisoftlimit")

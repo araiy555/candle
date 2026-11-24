@@ -1,8 +1,33 @@
 """1件の取引（仮想・バックテスト・将来の実取引で共通）と損切り・トレーリングの規則。"""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
+
+
+# 東証の呼値の単位（上限価格, 刻み）。10003 は TOPIX500 構成銘柄など細かい刻みの銘柄。
+_TICKS = {
+    "10000": [(3000, 1), (5000, 5), (30000, 10), (50000, 50), (300000, 100), (500000, 500),
+              (3000000, 1000), (5000000, 5000), (30000000, 10000), (50000000, 50000)],
+    "10003": [(1000, 0.1), (3000, 0.5), (10000, 1), (30000, 5), (100000, 10), (300000, 50),
+              (1000000, 100), (3000000, 500), (10000000, 1000), (30000000, 5000)],
+}
+
+
+def tick_size(price: float, group: str = "10000") -> float:
+    """その価格帯の呼値の単位。不明なグループは粗い刻み（どの銘柄でも有効な価格になる）で扱う。"""
+    for limit, tick in _TICKS.get(str(group), _TICKS["10000"]):
+        if price <= limit:
+            return tick
+    return 100000
+
+
+def trigger_price(stop: float, group: str = "10000") -> float:
+    """損切りライン stop を「下回ったら」に相当する逆指値のトリガ価格（stop 未満で最大の呼値）。"""
+    tick = tick_size(stop, group)
+    steps = math.ceil(round(stop / tick, 6))        # stop 以上で最小の呼値
+    return round(steps * tick - tick, 1)
 
 
 @dataclass
@@ -21,6 +46,18 @@ class Trade:
     exit_price: float | None = None
     exit_reason: str | None = None
     id: int | None = None
+    trail_mode: str = "r_step"    # r_step | percent | yen | none
+    trail_value: float = 0.0
+    pattern_low: float | None = None
+    # --- 以下は実取引（live）の注文管理用 ---
+    state: str = ""               # entering | open | replacing | exiting
+    entry_order: str = ""
+    stop_order: str = ""
+    exit_order: str = ""
+    server_stop: float | None = None   # 証券会社側に出ている逆指値のトリガ価格
+    tick_group: str = "10000"
+    exit_qty: int = 0             # 決済済みの株数（分割約定の途中経過）
+    exit_value: float = 0.0       # 決済済みの約定代金
 
     @property
     def risk(self) -> float:
@@ -32,18 +69,26 @@ class Trade:
         return self.exit_time is None
 
     def trail(self, price: float) -> bool:
-        """高値更新に応じて損切りを引き上げる。変更があれば True。
+        """高値更新に応じて損切りを引き上げる。変更があれば True。固定の利確は置かない。
 
-        +1R到達で建値、+2Rで+1R、+3Rで+2R…と、以降も1Rごとに追従する。
-        固定の利確は置かない。
+        r_step : +1R到達で建値、+2Rで+1R、+3Rで+2R…と1Rごとに追従する。
+        percent: 高値から trail_value % 下に追従する。
+        yen    : 高値から trail_value 円下に追従する。
+        none   : 引き上げない（初期損切りのまま）。
         """
         self.high = max(self.high, price)
-        n = int((self.high - self.entry_price) // self.risk) if self.risk > 0 else 0
-        if n >= 1:
-            new_stop = self.entry_price + (n - 1) * self.risk
-            if new_stop > self.stop:
-                self.stop = new_stop
-                return True
+        new_stop = None
+        if self.trail_mode == "r_step":
+            n = int((self.high - self.entry_price) // self.risk) if self.risk > 0 else 0
+            if n >= 1:
+                new_stop = self.entry_price + (n - 1) * self.risk
+        elif self.trail_mode == "percent" and self.trail_value > 0:
+            new_stop = self.high * (1 - self.trail_value / 100)
+        elif self.trail_mode == "yen" and self.trail_value > 0:
+            new_stop = self.high - self.trail_value
+        if new_stop is not None and new_stop > self.stop + 1e-9:
+            self.stop = new_stop
+            return True
         return False
 
     def close(self, time: datetime, price: float, reason: str) -> None:

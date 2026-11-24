@@ -12,19 +12,29 @@ from datetime import datetime, time
 from .bars import JST, Bar
 from .patterns import STRATEGIES, STRATEGY_BY_ID, Params, contiguous_tail
 from .risk import RiskManager
+from .settings import TradeSettings
 from .store import Store
 from .trade import Trade, summarize
 
 log = logging.getLogger(__name__)
-MODE = "paper"
 
 
 class PaperEngine:
+    mode = "paper"
+    mode_label = "テスト（仮想売買）"
+
     def __init__(self, store: Store, risk: RiskManager, params: Params | None = None,
                  slippage: float = 0.0005, exit_after: time = time(15, 20),
                  enabled: set[str] | None = None, trade_enabled: bool = True,
-                 notify=None, notify_ids: set[str] | None = None):
+                 notify=None, notify_ids: set[str] | None = None,
+                 settings: TradeSettings | None = None):
         self.store, self.risk = store, risk
+        self.settings = settings or TradeSettings(
+            per_trade_cap=risk.limits.per_symbol_cap, total_cap=risk.limits.total_cap,
+            daily_max_loss=risk.limits.daily_max_loss)
+        self.settings.apply_to(risk.limits)
+        self.close_all = False        # 管理画面の「全決済」
+        self.warnings: dict[str, str] = {}
         self.params = params or Params()
         self.slippage, self.exit_after = slippage, exit_after
         self.strategies = [s for s in STRATEGIES if enabled is None or s.id in enabled]
@@ -37,14 +47,14 @@ class PaperEngine:
         self.auto_chart = False   # サイン発生時にkabuステーションのチャートを自動で切り替える
         self.on_auto_chart = None  # 切り替えを行う関数（symbol を受け取る）
         self.pending: dict[str, list[tuple[str, datetime, float]]] = defaultdict(list)
-        self.open: list[Trade] = store.load_trades(MODE, open_only=True)
+        self.open: list[Trade] = store.load_trades(self.mode, open_only=True)
         self.day = None
         # 同一戦略・同一銘柄・同一発生時刻のサインは1回だけ扱う（再起動後も重複させない）
         self.seen: set[tuple[str, str, str]] = {
-            (r["strategy_id"], r["symbol"], r["time"]) for r in store.recent_signals(MODE, 2000)}
+            (r["strategy_id"], r["symbol"], r["time"]) for r in store.recent_signals(self.mode, 2000)}
         self.snapshot: dict = {}
         today = datetime.now(JST).date()
-        risk.realized_today = sum(t.pnl() for t in store.load_trades(MODE)
+        risk.realized_today = sum(t.pnl() for t in store.load_trades(self.mode)
                                   if t.exit_time and t.exit_time.astimezone(JST).date() == today)
 
     def load_history(self, symbols: list[str], minutes: int, today=None) -> None:
@@ -87,7 +97,7 @@ class PaperEngine:
             if self.trade_enabled:
                 self.pending[bar.symbol].append((s.id, bar.end, low))
             else:
-                self.store.add_signal(MODE, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ")
+                self.store.add_signal(self.mode, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ")
 
     def on_price(self, symbol: str, price: float, ts: datetime) -> None:
         self.prices[symbol] = price
@@ -112,26 +122,33 @@ class PaperEngine:
         for t in list(self.open):
             price = self.prices.get(t.symbol)
             stale = t.entry_time.astimezone(JST).date() < now.date()  # 停止中に持ち越した分
-            if price is not None and (late or stale):
-                self._close(t, now, price, "時間決済")
+            if price is not None and (late or stale or self.close_all):
+                self._close(t, now, price, "手動決済" if self.close_all and not late else "時間決済")
+        self.close_all = False
         self.snapshot = self.build_snapshot(now)
 
     # --- 売買 ---------------------------------------------------------------
     def _enter(self, strategy_id, symbol, sig_time, low, price, ts) -> None:
         entry = price * (1 + self.slippage)
-        unreal = sum(t.pnl(self.prices.get(t.symbol, t.entry_price)) for t in self.open)
-        if ts.time() >= self.exit_after:
-            qty, why = 0, "時間外"
-        else:
-            qty, why = self.risk.check_entry(strategy_id, symbol, entry, low, self.open, unreal)
-        self.store.add_signal(MODE, strategy_id, symbol, sig_time, price, low, why)
+        st = self.settings
+        stop = st.initial_stop(entry, low)
+        qty, why = self._check(strategy_id, symbol, entry, stop, ts)
+        self.store.add_signal(self.mode, strategy_id, symbol, sig_time, price, low, why)
         if qty <= 0:
             log.info("見送り %s %s: %s", strategy_id, symbol, why)
             return
-        t = Trade(MODE, strategy_id, symbol, sig_time, ts, entry, qty, low, low, high=entry)
+        t = Trade(self.mode, strategy_id, symbol, sig_time, ts, entry, qty, stop, stop, high=entry,
+                  trail_mode=st.trail_mode, trail_value=st.trail_value, pattern_low=low)
         self.store.save_trade(t)
         self.open.append(t)
-        log.info("仮想買い %s %s %d株 @%.1f 損切り%.1f", strategy_id, symbol, qty, entry, low)
+        log.info("仮想買い %s %s %d株 @%.1f 損切り%.1f", strategy_id, symbol, qty, entry, stop)
+
+    def _check(self, strategy_id, symbol, entry, stop, ts) -> tuple[int, str]:
+        """新規買いの可否と数量。"""
+        if ts.time() >= self.exit_after:
+            return 0, "時間外"
+        unreal = sum(t.pnl(self.prices.get(t.symbol, t.entry_price)) for t in self.open)
+        return self.risk.check_entry(strategy_id, symbol, entry, stop, self.open, unreal)
 
     def _close(self, t: Trade, ts: datetime, price: float, reason: str) -> None:
         t.close(ts, price * (1 - self.slippage), reason)
@@ -141,6 +158,15 @@ class PaperEngine:
         log.info("仮想決済 %s %s %s 損益%+.0f円", t.strategy_id, t.symbol, reason, t.pnl())
 
     # --- 管理画面用 ---------------------------------------------------------
+    def state_label(self, t: Trade) -> str:
+        return "保有中"
+
+    def update_settings(self, data: dict) -> None:
+        """管理画面からの設定変更。以後の新規の買いに適用する（保有中の分は変えない）。"""
+        new = TradeSettings.from_dict({**vars(self.settings), **data})
+        new.apply_to(self.risk.limits)
+        self.settings = new
+
     def chart_data(self, symbol: str) -> dict:
         """チャート表示用の当日の足。管理画面のスレッドから呼ばれる。"""
         for _ in range(3):
@@ -155,7 +181,7 @@ class PaperEngine:
                                v=b.volume, ok=b.complete) for b in bars])
 
     def build_snapshot(self, now: datetime) -> dict:
-        trades = self.store.load_trades(MODE)
+        trades = self.store.load_trades(self.mode)
         by_strategy = defaultdict(list)
         for t in trades:
             by_strategy[t.strategy_id].append(t)
@@ -165,6 +191,7 @@ class PaperEngine:
             px = self.prices.get(t.symbol)
             positions.append(dict(
                 strategy=name(t.strategy_id), symbol=t.symbol, qty=t.qty,
+                state=self.state_label(t), name=self.names.get(t.symbol),
                 signal_time=t.signal_time.isoformat(), entry_price=t.entry_price, price=px,
                 initial_stop=t.initial_stop, stop=t.stop,
                 pnl=None if px is None else t.pnl(px),
@@ -175,12 +202,14 @@ class PaperEngine:
                         exit_time=t.exit_time.isoformat(), exit_price=t.exit_price,
                         reason=t.exit_reason, pnl=t.pnl(), r=t.r_multiple())
                    for t in reversed(trades) if not t.is_open][:200]
-        signals = self.store.recent_signals(MODE, 50)
+        signals = self.store.recent_signals(self.mode, 50)
         for s in signals:
             s["strategy"] = name(s.pop("strategy_id"))
             s["name"] = self.names.get(s["symbol"])
         return dict(
-            time=now.isoformat(), mode="仮想売買" if self.trade_enabled else "通知のみ", halted=self.risk.halted,
+            time=now.isoformat(), mode=self.mode_label if self.trade_enabled else "通知のみ",
+            live=self.mode == "live", trading=self.trade_enabled,
+            settings=vars(self.settings), warnings=list(self.warnings.values()), halted=self.risk.halted,
             feed_ok=self.risk.feed_ok, auto_chart=self.auto_chart, realized_today=self.risk.realized_today,
             limits=vars(self.risk.limits),
             exposure=sum(t.entry_price * t.qty for t in self.open),
