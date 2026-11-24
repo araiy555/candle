@@ -28,7 +28,7 @@ class PaperEngine:
         self.params = params or Params()
         self.slippage, self.exit_after = slippage, exit_after
         self.strategies = [s for s in STRATEGIES if enabled is None or s.id in enabled]
-        self.history: dict[str, deque[Bar]] = defaultdict(lambda: deque(maxlen=80))
+        self.history: dict[str, deque[Bar]] = defaultdict(lambda: deque(maxlen=400))  # 1分足でも当日分が収まる
         self.prices: dict[str, float] = {}
         self.watchlist: list[str] = []
         self.names: dict[str, str] = {}
@@ -53,7 +53,7 @@ class PaperEngine:
         h.append(bar)
         if not bar.complete or bar.start.time() >= self.exit_after:
             return
-        window = contiguous_tail(list(h))
+        window = contiguous_tail(list(h)[-80:])
         for s in self.strategies:
             low = s.detect(window, self.params)
             if low is None:
@@ -124,6 +124,19 @@ class PaperEngine:
         log.info("仮想決済 %s %s %s 損益%+.0f円", t.strategy_id, t.symbol, reason, t.pnl())
 
     # --- 管理画面用 ---------------------------------------------------------
+    def chart_data(self, symbol: str) -> dict:
+        """チャート表示用の当日の足。管理画面のスレッドから呼ばれる。"""
+        for _ in range(3):
+            try:
+                bars = list(self.history.get(symbol, ()))
+                break
+            except RuntimeError:   # 追加と読み出しが重なった場合はやり直す
+                bars = []
+        return dict(symbol=symbol, name=self.names.get(symbol),
+                    minutes=bars[0].minutes if bars else None,
+                    bars=[dict(t=b.start.isoformat(), o=b.open, h=b.high, l=b.low, c=b.close,
+                               v=b.volume, ok=b.complete) for b in bars])
+
     def build_snapshot(self, now: datetime) -> dict:
         trades = self.store.load_trades(MODE)
         by_strategy = defaultdict(list)
