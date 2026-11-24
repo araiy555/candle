@@ -36,8 +36,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "notify-test":
         import time
         from .notify import Notifier
-        Notifier(cfg.notify_desktop, cfg.notify_sound, cfg.webhook_url).send(
-            "毛抜き底  7203 トヨタ（テスト）", "10:35 終値 3,010.0 / パターン安値 2,995.0")
+        Notifier(cfg.notify_desktop, cfg.notify_sound, cfg.webhook_url, cfg.notify_copy_code).send(
+            "毛抜き底  7203 トヨタ（テスト）", "10:35 終値 3,010.0 / パターン安値 2,995.0", "7203")
         time.sleep(8)
         print("通知を送りました。画面右下に表示されたか確認してください。")
         return 0
@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         from .web import start_web
 
         watch = args.cmd == "watch"
-        notifier = Notifier(cfg.notify_desktop, cfg.notify_sound, cfg.webhook_url)
+        notifier = Notifier(cfg.notify_desktop, cfg.notify_sound, cfg.webhook_url, cfg.notify_copy_code)
         if watch:
             cfg.universe_size = 50   # 売買しないので予備枠は不要。登録上限いっぱいまで監視する
             enabled = set(cfg.watch_strategies)

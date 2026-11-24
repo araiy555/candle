@@ -47,5 +47,6 @@ port = 8765                # 管理画面 http://localhost:8765 （このPCか�
 strategies = ["tweezer_bottom"]
 desktop = true             # Windowsのデスクトップ通知
 sound = true               # 通知音
+copy_code = true           # 通知と同時に銘柄コードをコピーする（kabuステーションに貼り付け用）
 # DiscordまたはSlackのWebhook URLを入れるとスマホにも届く（空なら使わない）
 webhook_url = ""

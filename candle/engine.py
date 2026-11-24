@@ -66,7 +66,8 @@ class PaperEngine:
             if self.notify and (self.notify_ids is None or s.id in self.notify_ids):
                 label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
                 self.notify(f"{s.name}  {label}",
-                            f"{bar.end:%H:%M} 終値 {bar.close:,.1f} / パターン安値 {low:,.1f}")
+                            f"{bar.end:%H:%M} 終値 {bar.close:,.1f} / パターン安値 {low:,.1f}",
+                            bar.symbol)
             if self.trade_enabled:
                 self.pending[bar.symbol].append((s.id, bar.end, low))
             else:

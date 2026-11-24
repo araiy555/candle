@@ -24,16 +24,27 @@ $n = [Windows.UI.Notifications.ToastNotification]::new($t)
 
 
 class Notifier:
-    def __init__(self, desktop: bool = True, sound: bool = True, webhook_url: str = ""):
+    def __init__(self, desktop: bool = True, sound: bool = True, webhook_url: str = "",
+                 copy_code: bool = True):
         self.desktop, self.sound, self.webhook_url = desktop, sound, webhook_url
+        self.copy_code = copy_code
 
-    def send(self, title: str, body: str) -> None:
-        """通知を送る。受信処理を止めないよう別スレッドで行い、失敗しても例外は出さない。"""
+    def send(self, title: str, body: str, symbol: str | None = None) -> None:
+        """通知を送る。受信処理を止めないよう別スレッドで行い、失敗しても例外は出さない。
+
+        symbol を渡すと銘柄コードをクリップボードに入れる（kabuステーションに貼り付けて使う）。
+        """
         log.info("通知: %s / %s", title, body)
-        threading.Thread(target=self._send, args=(title, body), daemon=True).start()
+        threading.Thread(target=self._send, args=(title, body, symbol), daemon=True).start()
 
-    def _send(self, title: str, body: str) -> None:
+    def _send(self, title: str, body: str, symbol: str | None) -> None:
         if sys.platform == "win32":
+            if self.copy_code and symbol and symbol.isalnum():
+                try:
+                    subprocess.run(["clip"], input=symbol.encode("ascii"), timeout=5,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                except Exception as e:
+                    log.debug("銘柄コードのコピーに失敗: %s", e)
             if self.sound:
                 try:
                     import winsound

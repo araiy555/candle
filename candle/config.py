@@ -28,6 +28,7 @@ class Config:
     notify_desktop: bool = True
     notify_sound: bool = True
     webhook_url: str = ""
+    notify_copy_code: bool = True
 
     @property
     def rest_url(self) -> str:
@@ -78,6 +79,7 @@ def load_config(path: str | Path | None = None) -> Config:
         notify_desktop=bool(raw.get("notify", {}).get("desktop", True)),
         notify_sound=bool(raw.get("notify", {}).get("sound", True)),
         webhook_url=str(raw.get("notify", {}).get("webhook_url", "")),
+        notify_copy_code=bool(raw.get("notify", {}).get("copy_code", True)),
     )
     if not 1 <= cfg.universe_size <= 50:
         raise ValueError("universe.size は 1〜50 で指定してください（API登録上限は50銘柄）")

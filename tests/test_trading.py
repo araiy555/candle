@@ -192,7 +192,7 @@ def test_watch_mode_notifies_only_selected_strategy_without_trading():
     rm.feed_ok = True
     sent = []
     e = PaperEngine(store, rm, enabled={"tweezer_bottom"}, trade_enabled=False,
-                    notify=lambda title, body: sent.append((title, body)),
+                    notify=lambda title, body, symbol: sent.append((title, body, symbol)),
                     notify_ids={"tweezer_bottom"})
     e.names = {"7203": "トヨタ"}
     feed_hammer(e, "6758")                                       # 別の形では通知しない
@@ -200,7 +200,7 @@ def test_watch_mode_notifies_only_selected_strategy_without_trading():
     bars = make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "7203")
     for b in bars:
         e.on_bar(b)
-    assert sent == [("毛抜き底  7203 トヨタ", "09:40 終値 1,006.0 / パターン安値 995.0")]
+    assert sent == [("毛抜き底  7203 トヨタ", "09:40 終値 1,006.0 / パターン安値 995.0", "7203")]
     e.on_price("7203", 1007, bars[-1].end)
     assert e.open == [] and store.load_trades("paper") == []     # 売買はしない
     assert store.recent_signals("paper")[0]["action"] == "通知のみ"
