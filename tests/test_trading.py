@@ -236,3 +236,17 @@ def test_no_signal_from_unconfirmed_or_incomplete_bar():
     for b in bars:
         e.on_bar(b)
     assert sent == []
+
+
+def test_history_is_restored_from_saved_bars_after_restart():
+    store = Store(":memory:")
+    bars = make_bars(DOWN + [(1010, 1011, 995, 998)], "7203")
+    store.save_bars(bars)
+    sent = []
+    e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"},
+                    trade_enabled=False, notify=lambda *a: sent.append(a))
+    e.load_history(["7203"], 5, today=bars[0].start.date())
+    assert len(e.chart_data("7203")["bars"]) == 7 and e.prices["7203"] == 998
+    nxt = make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "7203")[-1]
+    e.on_bar(nxt)                                                # 再起動直後の足でも判定できる
+    assert len(sent) == 1

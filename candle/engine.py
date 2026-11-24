@@ -45,6 +45,18 @@ class PaperEngine:
         risk.realized_today = sum(t.pnl() for t in store.load_trades(MODE)
                                   if t.exit_time and t.exit_time.astimezone(JST).date() == today)
 
+    def load_history(self, symbols: list[str], minutes: int, today=None) -> None:
+        """保存済みの当日の足を読み込む。再起動してもチャートと判定を途切れさせないため。"""
+        today = today or datetime.now(JST).date()
+        for sym in symbols:
+            if self.history[sym]:
+                continue
+            bars = [b for b in self.store.load_bars(sym, minutes, limit=400)
+                    if b.start.date() == today]
+            self.history[sym].extend(bars)
+            if bars:
+                self.prices.setdefault(sym, bars[-1].close)
+
     # --- 入力 ---------------------------------------------------------------
     def on_bar(self, bar: Bar) -> None:
         h = self.history[bar.symbol]
