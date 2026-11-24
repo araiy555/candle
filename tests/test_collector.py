@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from candle.collector import Pipeline, replay, run_collector
+from candle.collector import Pipeline, _parse_time, replay, run_collector
 from candle.config import Config
 from candle.store import Store
 
@@ -25,7 +25,8 @@ def test_pipeline_records_and_replay_roundtrip(tmp_path):
     for m in [msg("7203", "08:55:00", 3000, 0), msg("7203", "09:00:01", 3010, 1000),
               msg("7203", "09:03:00", 3040, 1600), msg("7203", "09:05:01", 3020, 2000),
               {"Symbol": "7203", "CurrentPrice": None, "CurrentPriceTime": None}]:
-        pipe.handle(m)
+        # 受信時刻は実行時の時計に左右されないよう、配信の時刻に合わせて固定する
+        pipe.handle(m, _parse_time(m["CurrentPriceTime"]) or _parse_time("2026-11-24T09:05:02+09:00"))
     pipe.finish()
     bars = store.load_bars("7203")
     assert [(b.open, b.high, b.low, b.close, b.volume) for b in bars] == [
