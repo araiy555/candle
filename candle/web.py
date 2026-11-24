@@ -49,7 +49,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <section><h2>取引履歴</h2><div id="history"></div></section>
 <section><h2>監視銘柄</h2><div class="watch" id="watch"></div></section>
 </main>
-<dialog id="dlg"><div class="dh"><b id="dt"></b><button id="copy">銘柄コードをコピー</button>
+<dialog id="dlg"><div class="dh"><b id="dt"></b><button id="kabu">kabuステーションで表示</button><span class="mut" id="kmsg" style="font-size:12px"></span><button id="copy">銘柄コードをコピー</button>
 <a id="l1" target="_blank" rel="noopener">Yahoo!ファイナンス</a><a id="l2" target="_blank" rel="noopener">TradingView</a><a id="l3" target="_blank" rel="noopener">株探</a>
 <span style="flex:1"></span><button id="close">閉じる</button></div>
 <div class="chart"><svg id="svg" role="img"></svg><div class="tip" id="tip"></div></div>
@@ -87,7 +87,7 @@ async function load(){
     d.stats.map(s=>[esc(s.strategy),s.trades,s.win_rate==null?'-':n(s.win_rate*100,1)+'%',s.pf==null?'-':n(s.pf,2),
       yen(s.expectancy),rr(s.expectancy_r),yen(s.total),s.avg_hold_min==null?'-':n(s.avg_hold_min)+'分']),'');
   table('signals',['戦略','銘柄','発生時刻','価格','パターン安値','結果'],
-    d.signals.map(s=>[esc(s.strategy),`<button class="link" data-sym="${esc(s.symbol)}">${esc(s.symbol)} ${esc(s.name||'')}</button>`,md(s.time),n(s.price,1),n(s.pattern_low,1),
+    d.signals.map(s=>[esc(s.strategy),`<button class="link" data-sym="${esc(s.symbol)}">${esc(s.symbol)} ${esc(s.name||'')}</button> <button data-kabu="${esc(s.symbol)}" style="padding:1px 8px;font-size:12px">kabuステで表示</button>`,md(s.time),n(s.price,1),n(s.pattern_low,1),
       s.action==='entry'?'エントリー':s.action==='通知のみ'?'通知':'<span class="mut">見送り: '+esc(s.action)+'</span>']),'まだサインはありません');
   table('history',['戦略','銘柄','株数','買い','買値','決済','売値','理由','損益(円)','R'],
     d.history.map(t=>[esc(t.strategy),esc(t.symbol),n(t.qty),md(t.entry_time),n(t.entry_price,1),md(t.exit_time),n(t.exit_price,1),
@@ -140,8 +140,12 @@ async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?
   $('note').textContent=`${d.minutes||''}分足・当日分（このプログラムが起動中に受信した足）。赤=陽線、緑=陰線、薄い足=データ欠落を含む足。▲と点線はサインとパターン安値。`;
   if(!$('tip').style.display||$('tip').style.display==='none')draw(d)}
 function openChart(sym){cur=sym;$('l1').href=`https://finance.yahoo.co.jp/quote/${sym}.T/chart`;$('l2').href=`https://jp.tradingview.com/chart/?symbol=TSE%3A${sym}`;
-  $('l3').href=`https://kabutan.jp/stock/chart?code=${sym}`;$('copy').textContent='銘柄コードをコピー';$('svg').innerHTML='';$('dt').textContent=sym;$('dlg').showModal();chart()}
-document.addEventListener('click',e=>{const b=e.target.closest('[data-sym]');if(b)openChart(b.dataset.sym)});
+  $('l3').href=`https://kabutan.jp/stock/chart?code=${sym}`;$('copy').textContent='銘柄コードをコピー';$('kmsg').textContent='';$('svg').innerHTML='';$('dt').textContent=sym;$('dlg').showModal();chart()}
+document.addEventListener('click',async e=>{const k=e.target.closest('[data-kabu]');if(k){const r=await kabu(k.dataset.kabu);if(r&&!r.ok)alert(r.message);return}
+  const b=e.target.closest('[data-sym]');if(b)openChart(b.dataset.sym)});
+async function kabu(sym,msgEl){if(msgEl)msgEl.textContent='切り替え中…';try{const r=await (await fetch('/api/kabu-chart?symbol='+encodeURIComponent(sym),{method:'POST'})).json();
+  if(msgEl)msgEl.textContent=r.ok?'':r.message;return r}catch(e){if(msgEl)msgEl.textContent='失敗しました'}}
+$('kabu').onclick=()=>kabu(cur,$('kmsg'));
 $('close').onclick=()=>$('dlg').close();$('dlg').addEventListener('close',()=>{cur=null});
 $('dlg').addEventListener('click',e=>{if(e.target===$('dlg'))$('dlg').close()});
 $('copy').onclick=async()=>{try{await navigator.clipboard.writeText(cur);$('copy').textContent='コピーしました'}catch(e){$('copy').textContent='コピーできませんでした'}};
@@ -179,6 +183,11 @@ def start_web(engine, port: int = 8765) -> ThreadingHTTPServer:
             origin = self.headers.get("Origin")
             if origin and origin not in (f"http://localhost:{port}", f"http://127.0.0.1:{port}"):
                 return self._send(b"forbidden", "text/plain", 403)
+            if self.path.startswith("/api/kabu-chart?symbol="):
+                from .kabuwin import show_chart
+                ok, message = show_chart(self.path.split("=", 1)[1][:10])
+                return self._send(json.dumps({"ok": ok, "message": message},
+                                             ensure_ascii=False).encode("utf-8"), "application/json")
             if self.path == "/api/halt":
                 engine.risk.halted = True
             elif self.path == "/api/resume":

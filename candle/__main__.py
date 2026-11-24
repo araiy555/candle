@@ -14,6 +14,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("notify-test", help="通知が届くかを試す")
+    p = sub.add_parser("kabu-chart", help="kabuステーションのチャートを指定銘柄に切り替える（実験的）")
+    p.add_argument("symbol")
+    p.add_argument("--inspect", action="store_true", help="チャート画面の構造を表示する（調査用）")
     sub.add_parser("check", help="接続確認（トークン発行とランキング取得のみ）")
     sub.add_parser("collect", help="PUSH配信を受信して5分足を保存する")
     sub.add_parser("watch", help="売買代金上位50銘柄を監視し、サインが出たら通知する（売買なし）")
@@ -32,6 +35,12 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     cfg = load_config(args.config)
+
+    if args.cmd == "kabu-chart":
+        from .kabuwin import show_chart
+        ok, message = show_chart(args.symbol, args.inspect)
+        print(message)
+        return 0 if ok else 1
 
     if args.cmd == "notify-test":
         import time
