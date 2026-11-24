@@ -250,3 +250,18 @@ def test_history_is_restored_from_saved_bars_after_restart():
     nxt = make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "7203")[-1]
     e.on_bar(nxt)                                                # 再起動直後の足でも判定できる
     assert len(sent) == 1
+
+
+def test_auto_chart_switch_only_when_enabled():
+    store = Store(":memory:")
+    e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"}, trade_enabled=False)
+    switched = []
+    e.on_auto_chart = switched.append
+    bars = make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "7203")
+    for b in bars:
+        e.on_bar(b)
+    assert switched == []                                        # 既定では切り替えない
+    e.auto_chart = True
+    for b in make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "6758"):
+        e.on_bar(b)
+    assert switched == ["6758"]

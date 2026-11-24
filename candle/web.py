@@ -40,6 +40,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 </style></head><body>
 <header><h1>candle</h1><span class="pill" id="mode"></span><span class="pill" id="feed"></span>
 <span class="pill" id="halt"></span><span class="mut" id="time"></span>
+<label class="pill" style="cursor:pointer"><input type="checkbox" id="auto" style="vertical-align:-2px"> サインが出たらkabuステーションのチャートを自動で切り替える</label>
 <span style="flex:1"></span><button id="btn"></button></header>
 <main>
 <section><div class="kpis" id="kpis"></div></section>
@@ -71,7 +72,7 @@ let halted=false,state=null,cur=null;
 async function load(){
   let d;try{d=await (await fetch('/api/state')).json()}catch(e){$('feed').innerHTML='<span class="ng">プログラム停止中</span>';return}
   if(!d.time){$('time').textContent='起動中…';return}
-  halted=d.halted;state=d;
+  halted=d.halted;state=d;$('auto').checked=!!d.auto_chart;
   $('mode').textContent=d.mode;$('time').textContent=md(d.time)+' 更新';
   $('feed').innerHTML=d.feed_ok?'<span class="ok">API接続中</span>':'<span class="ng">API切断（新規停止）</span>';
   $('halt').innerHTML=d.halted?'<span class="ng">緊急停止中</span>':'<span class="ok">新規受付中</span>';
@@ -146,6 +147,7 @@ document.addEventListener('click',async e=>{const k=e.target.closest('[data-kabu
 async function kabu(sym,msgEl){if(msgEl)msgEl.textContent='切り替え中…';try{const r=await (await fetch('/api/kabu-chart?symbol='+encodeURIComponent(sym),{method:'POST'})).json();
   if(msgEl)msgEl.textContent=r.ok?'':r.message;return r}catch(e){if(msgEl)msgEl.textContent='失敗しました'}}
 $('kabu').onclick=()=>kabu(cur,$('kmsg'));
+$('auto').onchange=()=>fetch('/api/auto-chart?on='+($('auto').checked?1:0),{method:'POST'});
 $('close').onclick=()=>$('dlg').close();$('dlg').addEventListener('close',()=>{cur=null});
 $('dlg').addEventListener('click',e=>{if(e.target===$('dlg'))$('dlg').close()});
 $('copy').onclick=async()=>{try{await navigator.clipboard.writeText(cur);$('copy').textContent='コピーしました'}catch(e){$('copy').textContent='コピーできませんでした'}};
@@ -153,7 +155,7 @@ load();setInterval(load,2000);setInterval(chart,5000);
 </script></body></html>"""
 
 
-def start_web(engine, port: int = 8765) -> ThreadingHTTPServer:
+def start_web(engine, port: int = 8765, settings_path=None) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def _send(self, body: bytes, ctype: str, status: int = 200):
             self.send_response(status)
@@ -177,7 +179,10 @@ def start_web(engine, port: int = 8765) -> ThreadingHTTPServer:
                 _, text = show_chart("0000", inspect=True)
                 self._send(text.encode("utf-8"), "text/plain; charset=utf-8")
             elif self.path == "/api/state":
-                self._send(json.dumps(engine.snapshot, ensure_ascii=False).encode("utf-8"),
+                state = dict(engine.snapshot)
+                if state:   # 切り替え操作はすぐ画面に反映する
+                    state.update(auto_chart=engine.auto_chart, halted=engine.risk.halted)
+                self._send(json.dumps(state, ensure_ascii=False).encode("utf-8"),
                            "application/json")
             else:
                 self._send(b"not found", "text/plain", 404)
@@ -192,6 +197,14 @@ def start_web(engine, port: int = 8765) -> ThreadingHTTPServer:
                 ok, message = show_chart(self.path.split("=", 1)[1][:10])
                 return self._send(json.dumps({"ok": ok, "message": message},
                                              ensure_ascii=False).encode("utf-8"), "application/json")
+            if self.path.startswith("/api/auto-chart?on="):
+                engine.auto_chart = self.path.endswith("=1")
+                if settings_path:
+                    try:
+                        settings_path.write_text("1" if engine.auto_chart else "0")
+                    except OSError:
+                        pass
+                return self._send(b"{}", "application/json")
             if self.path == "/api/halt":
                 engine.risk.halted = True
             elif self.path == "/api/resume":

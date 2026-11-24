@@ -8,8 +8,13 @@
 from __future__ import annotations
 
 import os
+import logging
 import subprocess
 import sys
+import threading
+
+log = logging.getLogger(__name__)
+_lock = threading.Lock()
 
 _SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
@@ -65,20 +70,19 @@ if ($inspect) {
 }
 if ($charts.Count -eq 0) { 'NG:チャート画面が見つかりません。kabuステーションでチャートを1つ開いておいてください。'; exit 3 }
 
-# チャート画面の中の銘柄コード欄（「3436/T」のような値が入った入力欄）を探す。
-# 入力欄そのもの（Edit）を優先し、無ければ同じ値を持つ他の部品（コンボボックスなど）を使う。
+# 株式のチャート（題名が「チャート：2914/T」のように4桁コード）だけを対象にする。
+# 先物などのチャート（「チャート：101.2612/O」）は書き換えない。
+$chart = $null
+foreach ($c in $charts) { if ($c.Current.Name -match '[:：]\s*[0-9A-Za-z]{4}/') { $chart = $c; break } }
+if (-not $chart) { 'NG:株式のチャート画面が見つかりません。kabuステーションで株式のチャートを1つ開いておいてください。'; exit 3 }
+
+# 銘柄コード欄は、コンボボックスの中の入力欄（id が "[Editor] Edit Area"）
 $edit = $null
-foreach ($chart in $charts) {
-  $cands = @()
-  foreach ($e in $chart.FindAll($scope::Descendants, $all)) {
-    $v = Val $e
-    if ($v -match '^[0-9A-Za-z]{4,5}/[0-9A-Za-z]+$') { $cands += $e }
-  }
-  foreach ($e in $cands) { if ($e.Current.ControlType -eq $editType) { $edit = $e; break } }
-  if (-not $edit -and $cands.Count -gt 0) { $edit = $cands[0] }
-  if ($edit) { break }
-}
+$edits = $chart.FindAll($scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $editType)))
+foreach ($e in $edits) { if ($e.Current.AutomationId -eq '[Editor] Edit Area') { $edit = $e; break } }
+if (-not $edit) { foreach ($e in $edits) { if ((Val $e) -match '^[0-9A-Za-z]{4}(/[0-9A-Za-z]+)?$') { $edit = $e; break } } }
 if (-not $edit) { 'NG:チャート画面の銘柄コード欄が見つかりません。'; exit 4 }
+$combo = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($edit)
 
 try { (New-Object -ComObject WScript.Shell).AppActivate($main.Current.ProcessId) | Out-Null } catch {}
 Start-Sleep -Milliseconds 200
@@ -90,8 +94,10 @@ $focused = $AE::FocusedElement
 $same = $false
 try {
   $w = [System.Windows.Automation.TreeWalker]::RawViewWalker; $f = $focused
-  for ($i = 0; $i -lt 3 -and $f -and -not $same; $i++) {   # 欄そのもの、またはその内側にフォーカスがあること
-    $same = [System.Windows.Automation.Automation]::Compare($f.GetRuntimeId(), $edit.GetRuntimeId()); $f = $w.GetParent($f)
+  for ($i = 0; $i -lt 3 -and $f -and -not $same; $i++) {   # 欄そのもの、その内側、または欄を含むコンボボックス
+    $id = $f.GetRuntimeId()
+    $same = [System.Windows.Automation.Automation]::Compare($id, $edit.GetRuntimeId()) -or ($combo -and [System.Windows.Automation.Automation]::Compare($id, $combo.GetRuntimeId()))
+    $f = $w.GetParent($f)
   }
 } catch {}
 if (-not $same) { 'NG:銘柄コード欄を選択できなかったため、何も入力しませんでした。'; exit 5 }
@@ -100,7 +106,10 @@ $set = $false
 try { $p = $null; if ($edit.TryGetCurrentPattern($valuePattern, [ref]$p) -and -not $p.Current.IsReadOnly) { $p.SetValue($code); $set = $true } } catch {}
 if ($set) { [System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
 else { [System.Windows.Forms.SendKeys]::SendWait('^a' + $code + '{ENTER}') }
-'OK:' + $code
+# 題名が指定の銘柄に変わったかを確かめる
+$done = $false
+for ($i = 0; $i -lt 10 -and -not $done; $i++) { Start-Sleep -Milliseconds 200; try { $done = $chart.Current.Name -match ('[:：]\s*' + $code + '/') } catch {} }
+if ($done) { 'OK:' + $code } else { 'NG:銘柄コードを入力しましたが、チャートの切り替わりを確認できませんでした。' }
 """
 
 
@@ -125,3 +134,12 @@ def show_chart(symbol: str, inspect: bool = False) -> tuple[bool, str]:
     if out.startswith("OK:"):
         return True, f"{symbol} に切り替えました"
     return False, (out[3:] if out.startswith("NG:") else (out or err or "原因不明の失敗"))[:300]
+
+
+def show_chart_async(symbol: str) -> None:
+    """受信処理を止めずに切り替える。重なった場合は順番に実行する。"""
+    def run():
+        with _lock:
+            ok, message = show_chart(symbol)
+            log.info("チャート自動切り替え %s: %s", symbol, message)
+    threading.Thread(target=run, daemon=True).start()

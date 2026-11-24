@@ -114,7 +114,11 @@ def main(argv: list[str] | None = None) -> int:
                                  exit_after=dtime(h, m), enabled=enabled,
                                  trade_enabled=not watch, notify=notifier.send,
                                  notify_ids=set(cfg.watch_strategies))
-            start_web(engine, cfg.web_port)
+            from .kabuwin import show_chart_async
+            flag = cfg.data_dir / "auto_chart.txt"
+            engine.on_auto_chart = show_chart_async
+            engine.auto_chart = flag.exists() and flag.read_text().strip() == "1"
+            start_web(engine, cfg.web_port, flag)
             print(f"管理画面: http://localhost:{cfg.web_port}")
             return engine
 

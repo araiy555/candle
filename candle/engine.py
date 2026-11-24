@@ -34,6 +34,8 @@ class PaperEngine:
         self.names: dict[str, str] = {}
         self.trade_enabled = trade_enabled   # False: 通知のみ（仮想売買もしない）
         self.notify, self.notify_ids = notify, notify_ids
+        self.auto_chart = False   # サイン発生時にkabuステーションのチャートを自動で切り替える
+        self.on_auto_chart = None  # 切り替えを行う関数（symbol を受け取る）
         self.pending: dict[str, list[tuple[str, datetime, float]]] = defaultdict(list)
         self.open: list[Trade] = store.load_trades(MODE, open_only=True)
         self.day = None
@@ -80,6 +82,8 @@ class PaperEngine:
                 self.notify(f"{s.name}  {label}",
                             f"{bar.end:%H:%M} 終値 {bar.close:,.1f} / パターン安値 {low:,.1f}",
                             bar.symbol)
+            if self.auto_chart and self.on_auto_chart:
+                self.on_auto_chart(bar.symbol)
             if self.trade_enabled:
                 self.pending[bar.symbol].append((s.id, bar.end, low))
             else:
@@ -177,7 +181,7 @@ class PaperEngine:
             s["name"] = self.names.get(s["symbol"])
         return dict(
             time=now.isoformat(), mode="仮想売買" if self.trade_enabled else "通知のみ", halted=self.risk.halted,
-            feed_ok=self.risk.feed_ok, realized_today=self.risk.realized_today,
+            feed_ok=self.risk.feed_ok, auto_chart=self.auto_chart, realized_today=self.risk.realized_today,
             limits=vars(self.risk.limits),
             exposure=sum(t.entry_price * t.qty for t in self.open),
             watchlist=[dict(symbol=s, name=self.names.get(s), price=self.prices.get(s))
