@@ -44,8 +44,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "check":
         from .kabu_client import KabuClient
+        from .kabu_client import KabuApiError
         client = KabuClient(cfg.rest_url, cfg.api_password)
-        client.token()
+        kind = "検証用" if cfg.port == 18081 else "本番用"
+        try:
+            client.token()
+        except KabuApiError as e:
+            if e.status == 401:
+                print(f"APIパスワードが違います。いま接続しているのは{kind}（ポート{cfg.port}）です。")
+                print(f"kabuステーションで設定した「{kind}」のAPIパスワードを入力してください。")
+                print("本番用と検証用は別のパスワードです。切り替えは config.toml の port で行います"
+                      "（本番 18080 / 検証 18081）。")
+            else:
+                print(e)
+            return 1
+        except Exception as e:
+            print(f"kabuステーションに接続できません（ポート{cfg.port}）: {e}")
+            print("kabuステーションを起動してログインし、APIを有効にしているか確認してください。")
+            return 1
         print(f"トークン発行: OK ({cfg.rest_url})")
         rows = client.ranking(4, cfg.exchange_division)
         print(f"売買代金ランキング: {len(rows)} 件")

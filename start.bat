@@ -9,7 +9,6 @@ if "%KABU_API_PASSWORD%"=="" set /p KABU_API_PASSWORD=APIパスワードを入�
 %PY% -m candle check
 if errorlevel 1 (
   echo.
-  echo 接続できませんでした。kabuステーションにログインしているか確認してください。
   pause
   exit /b 1
 )
