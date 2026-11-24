@@ -10,7 +10,7 @@ from typing import Callable, Iterable
 
 from .bars import JST, Bar, BarBuilder
 from .config import Config
-from .kabu_client import KabuClient
+from .kabu_client import KabuApiError, KabuClient
 from .store import Store
 from .universe import select_universe
 
@@ -112,36 +112,85 @@ def replay(lines: Iterable[str], store: Store, minutes: int = 5) -> Pipeline:
     return pipe
 
 
+class _EngineSink:
+    """エンジン1つをそのまま使う場合の受け口（コマンドでモードを指定して起動したとき）。"""
+
+    def __init__(self, cfg: Config, engine):
+        self.cfg, self.engine = cfg, engine
+
+    def on_bar(self, bar) -> None:
+        if self.engine:
+            self.engine.on_bar(bar)
+
+    def on_price(self, symbol, price, ts) -> None:
+        if self.engine:
+            self.engine.on_price(symbol, price, ts)
+
+    def on_clock(self, now) -> None:
+        if self.engine:
+            self.engine.on_clock(now)
+
+    def set_feed(self, ok: bool) -> None:
+        if self.engine:
+            self.engine.risk.feed_ok = ok
+
+    def set_universe(self, symbols, names, minutes) -> None:
+        if self.engine:
+            self.engine.watchlist, self.engine.names = symbols, names
+            self.engine.load_history(symbols, minutes)
+
+    @property
+    def password(self) -> str:
+        return self.cfg.api_password
+
+    def login_failed(self) -> None:
+        pass
+
+
 async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
-                        engine_factory=None) -> None:
-    """トークン取得 → 監視銘柄選定 → 登録 → PUSH受信。切断時は自動で再接続する。"""
+                        engine_factory=None, app=None) -> None:
+    """トークン取得 → 監視銘柄選定 → 登録 → PUSH受信。切断時は自動で再接続する。
+
+    app を渡すと、パスワードの入力とモードの切り替えをブラウザから行える。
+    """
     import websockets  # 実接続時のみ必要
 
     stop = stop or asyncio.Event()
     store = Store(cfg.db_path)
-    engine = engine_factory(store) if engine_factory else None
+    if app is not None:
+        app.setup(store)
+        sink = app
+    else:
+        sink = _EngineSink(cfg, engine_factory(store) if engine_factory else None)
     pipe = Pipeline(store, cfg.bar_minutes, cfg.data_dir / "raw" if cfg.record_raw else None,
-                    on_bar=engine.on_bar if engine else None,
-                    on_price=engine.on_price if engine else None)
-
-    def feed(ok: bool) -> None:
-        if engine:
-            engine.risk.feed_ok = ok
-    client = KabuClient(cfg.rest_url, cfg.api_password)
+                    on_bar=sink.on_bar, on_price=sink.on_price)
+    feed = sink.set_feed
 
     async def flusher():
         while not stop.is_set():
             await asyncio.sleep(1)
             pipe.flush()
-            if engine:
-                engine.on_clock(datetime.now(JST))
+            try:
+                sink.on_clock(datetime.now(JST))
+            except Exception:
+                log.exception("定期処理でエラーが発生しました")
 
     flush_task = asyncio.create_task(flusher())
     backoff = 1.0
     try:
         while not stop.is_set():
             try:
-                await asyncio.to_thread(client.token)
+                while not sink.password and not stop.is_set():   # ブラウザでの入力を待つ
+                    await asyncio.sleep(0.5)
+                if stop.is_set():
+                    break
+                client = KabuClient(cfg.rest_url, sink.password)
+                try:
+                    await asyncio.to_thread(client.token)
+                except KabuApiError as e:
+                    if e.status == 401:
+                        sink.login_failed()
+                    raise
                 # SQLiteは作成したスレッドでのみ使えるため、ここは同期で呼ぶ（起動時のみ・短時間）
                 symbols = select_universe(cfg, client, store)
                 await asyncio.to_thread(client.unregister_all)
@@ -151,11 +200,9 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
                                               max_size=None) as ws:
                     log.info("PUSH配信に接続しました (%s)", cfg.ws_url)
                     backoff = 1.0
-                    if engine:
-                        engine.watchlist = symbols
-                        wl = store.latest_watchlist()
-                        engine.names = {r["symbol"]: r["name"] for r in wl[1]} if wl else {}
-                        engine.load_history(symbols, cfg.bar_minutes)
+                    wl = store.latest_watchlist()
+                    sink.set_universe(symbols, {r["symbol"]: r["name"] for r in wl[1]} if wl else {},
+                                      cfg.bar_minutes)
                     feed(True)
                     while not stop.is_set():
                         try:

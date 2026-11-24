@@ -37,6 +37,9 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .chart{position:relative;padding:8px 8px 12px}.chart svg{display:block;width:100%;height:360px}
 .tip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;font-variant-numeric:tabular-nums}
 .note{color:var(--mut);font-size:12px;padding:0 16px 12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;border-right:1px solid var(--line);padding:6px 16px}.seg button:last-child{border-right:0}
+.seg button.on{background:var(--acc);color:#fff;font-weight:600}.seg button.on[data-mode=live]{background:#c0392b}
 .live{background:#c0392b;border-color:#c0392b;color:#fff;font-weight:600}
 #warn{border-color:var(--warn)}#warn li{margin:2px 0}
 .form{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px 20px;align-items:end}
@@ -45,7 +48,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .form select{flex:1}.form input{width:110px;text-align:right}.form input:disabled{opacity:.4}
 [hidden]{display:none!important}
 </style></head><body>
-<header><h1>candle</h1><span class="pill" id="mode"></span><span class="pill" id="feed"></span>
+<header><h1>candle</h1><span class="pill" id="mode"></span><span class="seg" id="modes" hidden><button data-mode="watch">通知のみ</button><button data-mode="paper">テスト</button><button data-mode="live">本番</button></span><span class="pill" id="feed"></span>
 <span class="pill" id="halt"></span><span class="mut" id="time"></span>
 <label class="pill" style="cursor:pointer"><input type="checkbox" id="auto" style="vertical-align:-2px"> サインが出たらkabuステーションのチャートを自動で切り替える</label>
 <span style="flex:1"></span><button id="closeall" hidden>全ポジションを決済</button><button id="btn"></button></header>
@@ -93,6 +96,8 @@ async function load(){
   halted=d.halted;state=d;$('auto').checked=!!d.auto_chart;
   document.querySelectorAll('[data-trade]').forEach(e=>e.hidden=!d.trading);$('closeall').hidden=!d.trading;
   $('mode').className='pill'+(d.live&&d.trading?' live':'');
+  $('modes').hidden=!d.can_switch;$('mode').hidden=!!d.can_switch;
+  document.querySelectorAll('#modes button').forEach(b=>{b.className=b.dataset.mode===d.mode_key?'on':'';b.disabled=!!d.switching});
   $('warn').hidden=!(d.warnings&&d.warnings.length);$('warnlist').innerHTML=(d.warnings||[]).map(w=>`<li>${esc(w)}</li>`).join('');
   if(!formLoaded&&d.settings){for(const k of FIELDS)$(k).value=d.settings[k];formLoaded=true;syncForm()}
   $('mode').textContent=d.mode;$('time').textContent=md(d.time)+' 更新';
@@ -169,6 +174,9 @@ document.addEventListener('click',async e=>{const k=e.target.closest('[data-kabu
 async function kabu(sym,msgEl){if(msgEl)msgEl.textContent='切り替え中…';try{const r=await (await fetch('/api/kabu-chart?symbol='+encodeURIComponent(sym),{method:'POST'})).json();
   if(msgEl)msgEl.textContent=r.ok?'':r.message;return r}catch(e){if(msgEl)msgEl.textContent='失敗しました'}}
 $('kabu').onclick=()=>kabu(cur,$('kmsg'));
+document.querySelectorAll('#modes button').forEach(b=>b.onclick=async()=>{const m=b.dataset.mode;if(state&&state.mode_key===m)return;
+  if(m==='live'){const a=prompt('本番に切り替えます。毛抜き底のサインが出ると、確認なしで実際に信用取引の買い注文を出します。\n開始するには yes と入力してください。');if((a||'').trim().toLowerCase()!=='yes')return}
+  try{const r=await (await fetch('/api/mode?m='+m,{method:'POST'})).json();if(!r.ok)alert(r.message)}catch(e){alert('切り替えできませんでした')}load()});
 $('stop_mode').onchange=$('trail_mode').onchange=syncForm;
 $('save').onclick=async()=>{const body={};for(const k of FIELDS)body[k]=$(k).value;
   try{const r=await (await fetch('/api/settings',{method:'POST',body:JSON.stringify(body)})).json();$('savemsg').textContent=r.message;if(r.ok)formLoaded=false}catch(e){$('savemsg').textContent='保存できませんでした'}};
@@ -181,7 +189,13 @@ load();setInterval(load,2000);setInterval(chart,5000);
 </script></body></html>"""
 
 
-def start_web(engine, port: int = 8765, data_dir=None) -> ThreadingHTTPServer:
+def start_web(target, port: int = 8765, data_dir=None) -> ThreadingHTTPServer:
+    """target はエンジン、またはモードを切り替えられる App。"""
+    app = target if hasattr(target, "request_mode") else None
+
+    def cur():
+        return app.engine if app else target
+
     flag_path = data_dir / "auto_chart.txt" if data_dir else None
     settings_file = data_dir / "settings.json" if data_dir else None
 
@@ -201,17 +215,21 @@ def start_web(engine, port: int = 8765, data_dir=None) -> ThreadingHTTPServer:
                 symbol = self.path.split("=", 1)[1][:10]
                 if not symbol.isalnum():
                     return self._send(b"bad symbol", "text/plain", 400)
-                self._send(json.dumps(engine.chart_data(symbol), ensure_ascii=False).encode("utf-8"),
+                self._send(json.dumps(cur().chart_data(symbol), ensure_ascii=False).encode("utf-8"),
                            "application/json")
             elif self.path == "/kabu-inspect":
                 from .kabuwin import show_chart
                 _, text = show_chart("0000", inspect=True)
                 self._send(text.encode("utf-8"), "text/plain; charset=utf-8")
             elif self.path == "/api/state":
-                state = dict(engine.snapshot)
-                if state:   # 切り替え操作はすぐ画面に反映する
-                    state.update(auto_chart=engine.auto_chart, halted=engine.risk.halted,
-                                 settings=vars(engine.settings))
+                eng = cur()
+                state = dict(eng.snapshot) if eng else {}
+                if app:
+                    state.update(can_switch=True, mode_key=app.mode,
+                                 switching=bool(app.want and app.want != app.mode))
+                if state.get("time"):   # 切り替え操作はすぐ画面に反映する
+                    state.update(auto_chart=cur().auto_chart, halted=cur().risk.halted,
+                                 settings=vars(cur().settings))
                 self._send(json.dumps(state, ensure_ascii=False).encode("utf-8"),
                            "application/json")
             else:
@@ -228,30 +246,38 @@ def start_web(engine, port: int = 8765, data_dir=None) -> ThreadingHTTPServer:
                 return self._send(json.dumps({"ok": ok, "message": message},
                                              ensure_ascii=False).encode("utf-8"), "application/json")
             if self.path.startswith("/api/auto-chart?on="):
-                engine.auto_chart = self.path.endswith("=1")
+                cur().auto_chart = self.path.endswith("=1")
                 if flag_path:
                     try:
-                        flag_path.write_text("1" if engine.auto_chart else "0")
+                        flag_path.write_text("1" if cur().auto_chart else "0")
                     except OSError:
                         pass
                 return self._send(b"{}", "application/json")
+            if self.path.startswith("/api/mode?m="):
+                if app is None:
+                    res = {"ok": False, "message": "この起動方法ではモードを切り替えられません"}
+                else:
+                    ok, message = app.request_mode(self.path.split("=", 1)[1])
+                    res = {"ok": ok, "message": message}
+                return self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"),
+                                  "application/json")
             if self.path == "/api/settings":
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
-                    engine.update_settings(json.loads(self.rfile.read(n) or b"{}"))
-                    engine.settings.save(settings_file)
+                    cur().update_settings(json.loads(self.rfile.read(n) or b"{}"))
+                    cur().settings.save(settings_file)
                     res = {"ok": True, "message": "保存しました。次の買いから適用します。"}
                 except (ValueError, TypeError) as e:
                     res = {"ok": False, "message": str(e)}
                 return self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"),
                                   "application/json")
             if self.path == "/api/close-all":
-                engine.close_all = True
+                cur().close_all = True
                 return self._send(b"{}", "application/json")
             if self.path == "/api/halt":
-                engine.risk.halted = True
+                cur().risk.halted = True
             elif self.path == "/api/resume":
-                engine.risk.halted = False
+                cur().risk.halted = False
             else:
                 return self._send(b"not found", "text/plain", 404)
             self._send(b"{}", "application/json")
