@@ -56,7 +56,7 @@ def load_config(path: str | Path | None = None) -> Config:
         if path:
             raise FileNotFoundError(p)
         return Config()
-    raw = tomllib.loads(p.read_text(encoding="utf-8"))
+    raw = tomllib.loads(p.read_text(encoding="utf-8-sig"))  # メモ帳のBOM付き保存にも対応
     api, uni = raw.get("api", {}), raw.get("universe", {})
     data, bars = raw.get("data", {}), raw.get("bars", {})
     cfg = Config(

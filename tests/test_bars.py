@@ -88,3 +88,24 @@ def test_no_bar_outside_session_and_new_day_resets():
     b.on_tick("A", nxt, 102, 300)
     bar = b.close_all()[0]
     assert bar.start.day == 25 and bar.volume == 300 and bar.complete
+
+
+def test_one_minute_bars_and_contiguity():
+    from candle.patterns import expected_next
+    assert bucket_start(t(9, 0, 59), 1) == t(9, 0)
+    assert bucket_start(t(9, 1), 1) == t(9, 1)
+    assert bucket_start(t(11, 30), 1) == t(11, 29) and bucket_start(t(15, 30), 1) == t(15, 29)
+    assert expected_next(t(11, 29), 1) == t(12, 30) and expected_next(t(15, 29), 1) is None
+    b = BarBuilder(1)
+    b.on_tick("A", t(8, 55), 100, 0)
+    b.on_tick("A", t(9, 0, 10), 100, 10)
+    b.on_tick("A", t(9, 0, 50), 102, 30)
+    (bar,) = b.on_tick("A", t(9, 1, 5), 101, 40)
+    assert (bar.start, bar.minutes, bar.open, bar.close, bar.volume) == (t(9, 0), 1, 100, 102, 30)
+
+
+def test_config_with_bom_and_one_minute(tmp_path):
+    from candle.config import load_config
+    p = tmp_path / "config.toml"
+    p.write_bytes(b"\xef\xbb\xbf[bars]\nminutes = 1\n")
+    assert load_config(p).bar_minutes == 1
