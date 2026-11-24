@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .kabu_client import KabuClient
+from .kabu_client import KabuApiError, KabuClient
 
 
 @dataclass
@@ -14,6 +14,7 @@ class OrderStatus:
     done: bool                 # 注文が終了したか（全約定・取消済・失効・エラー）
     cum_qty: int = 0           # 約定した株数
     avg_price: float | None = None
+    fills: tuple = ()          # 約定ごとの (約定番号, 株数)。返済する建玉の指定に使う
 
 
 @dataclass
@@ -40,26 +41,57 @@ class KabuBroker:
         return {**self._base(symbol, qty), "Side": "2", "CashMargin": 2, "DelivType": 0,
                 "FrontOrderType": 10}
 
-    def close_body(self, symbol: str, qty: int) -> dict:
+    @staticmethod
+    def _target(qty: int, holds: list[tuple[str, int]] | None) -> dict:
+        """返済する建玉の指定。約定番号が分かっていれば、その建玉だけを返済する。
+
+        番号で指定することで、同じ銘柄を手動で別に持っていても取り違えない。
+        """
+        picked, left = [], int(qty)
+        for hold_id, hold_qty in holds or []:
+            if left <= 0:
+                break
+            take = min(left, int(hold_qty))
+            if hold_id and take > 0:
+                picked.append({"HoldID": hold_id, "Qty": take})
+                left -= take
+        if picked and left == 0:
+            return {"ClosePositions": picked}
+        return {"ClosePositionOrder": 0}   # 番号が分からない場合は古い建玉から返済
+
+    def close_body(self, symbol: str, qty: int, holds=None) -> dict:
         """信用返済売り・成行。"""
         return {**self._base(symbol, qty), "Side": "1", "CashMargin": 3, "DelivType": 2,
-                "ClosePositionOrder": 0, "FrontOrderType": 10}
+                **self._target(qty, holds), "FrontOrderType": 10}
 
-    def stop_body(self, symbol: str, qty: int, trigger: float) -> dict:
+    def stop_body(self, symbol: str, qty: int, trigger: float, holds=None) -> dict:
         """信用返済売り・逆指値（トリガ価格以下になったら成行）。"""
         return {**self._base(symbol, qty), "Side": "1", "CashMargin": 3, "DelivType": 2,
-                "ClosePositionOrder": 0, "FrontOrderType": 30,
+                **self._target(qty, holds), "FrontOrderType": 30,
                 "ReverseLimitOrder": {"TriggerSec": 1, "TriggerPrice": trigger, "UnderOver": 1,
                                       "AfterHitOrderType": 1, "AfterHitPrice": 0}}
+
+    def _sell(self, body: dict) -> str:
+        """売り注文を送る。建玉番号の指定で拒否された場合は、指定なしで1回だけ送り直す。
+
+        返済は保有株数を超えて約定しないので、送り直しても売りすぎにはならない。
+        """
+        try:
+            return self.client.send_order(body)
+        except KabuApiError:
+            if "ClosePositions" not in body:
+                raise
+            retry = {k: v for k, v in body.items() if k != "ClosePositions"}
+            return self.client.send_order({**retry, "ClosePositionOrder": 0})
 
     def buy_market(self, symbol: str, qty: int) -> str:
         return self.client.send_order(self.buy_body(symbol, qty))
 
-    def close_market(self, symbol: str, qty: int) -> str:
-        return self.client.send_order(self.close_body(symbol, qty))
+    def close_market(self, symbol: str, qty: int, holds=None) -> str:
+        return self._sell(self.close_body(symbol, qty, holds))
 
-    def place_stop(self, symbol: str, qty: int, trigger: float) -> str:
-        return self.client.send_order(self.stop_body(symbol, qty, trigger))
+    def place_stop(self, symbol: str, qty: int, trigger: float, holds=None) -> str:
+        return self._sell(self.stop_body(symbol, qty, trigger, holds))
 
     def cancel(self, order_id: str) -> None:
         self.client.cancel_order(order_id)
@@ -87,12 +119,15 @@ class KabuBroker:
 
 def parse_order(row: dict) -> OrderStatus:
     """注文約定照会の1件から、終了したか・約定株数・平均約定価格を取り出す。"""
-    qty, value = 0.0, 0.0
+    qty, value, fills = 0.0, 0.0, []
     for d in row.get("Details") or []:
         if d.get("RecType") == 8 and d.get("Qty"):   # 8 = 約定
             qty += float(d["Qty"])
             value += float(d["Qty"]) * float(d.get("Price") or 0)
+            if d.get("ExecutionID"):
+                fills.append((str(d["ExecutionID"]), int(d["Qty"])))
     cum = int(row.get("CumQty") or 0)
     avg = value / qty if qty > 0 and value > 0 else None
     state = row.get("State", row.get("OrderState"))
-    return OrderStatus(done=state == 5, cum_qty=cum, avg_price=avg if cum > 0 else None)
+    return OrderStatus(done=state == 5, cum_qty=cum, avg_price=avg if cum > 0 else None,
+                       fills=tuple(fills))

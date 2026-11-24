@@ -15,7 +15,7 @@ def order_check(cfg) -> int:
     import os
 
     from .broker import KabuBroker
-    from .kabu_client import KabuClient
+    from .kabu_client import KabuApiError, KabuClient
 
     pw = os.environ.get("KABU_API_PASSWORD_TEST") or getpass.getpass("検証用のAPIパスワード: ")
     client = KabuClient(f"http://{cfg.host}:18081/kabusapi", pw)
@@ -26,29 +26,47 @@ def order_check(cfg) -> int:
         print(f"検証用環境（ポート18081）に接続できません: {e}")
         return 1
     print("検証用環境に接続しました。本番と同じ形の注文を送ります（実際の注文にはなりません）。\n")
+    dummy = [("E20200924xxxxx", 100)]   # 検証用の仮の建玉番号
     steps = [("信用新規買い・成行", broker.buy_body("7203", 100)),
-             ("信用返済売り・逆指値", broker.stop_body("7203", 100, 2000)),
-             ("信用返済売り・成行", broker.close_body("7203", 100))]
-    ok, order_id = True, None
+             ("信用返済売り・逆指値（建玉番号を指定）", broker.stop_body("7203", 100, 2000, dummy)),
+             ("信用返済売り・成行（建玉番号を指定）", broker.close_body("7203", 100, dummy)),
+             ("信用返済売り・成行（建玉番号の指定なし）", broker.close_body("7203", 100))]
+    bad = 0
     for label, body in steps:
         try:
-            order_id = client.send_order(body)
-            print(f"[受付] {label}: 注文番号 {order_id}")
-        except Exception as e:
-            ok = False
-            print(f"[拒否] {label}: {e}")
-            print("       送った内容: " + json.dumps(body, ensure_ascii=False))
-    for label, call in (("取消", lambda: client.cancel_order(order_id or "20200529A01N06848002")),
-                        ("注文照会", lambda: client.orders()),
+            res = client._request("POST", "/sendorder", json=body)
+            if res.get("Result") == 0:
+                print(f"[受付] {label}")
+            else:
+                bad += 1
+                print(f"[拒否] {label}: {res}")
+        except KabuApiError as e:
+            if '"Code":1009001' in e.body.replace(" ", ""):
+                # 検証用環境には建玉が無いので、返済注文はここで止まる。形式の誤りではない。
+                print(f"[保留] {label}: 検証用環境に建玉が無いため、これ以上は確かめられません")
+            else:
+                bad += 1
+                print(f"[拒否] {label}: {e}")
+                print("       送った内容: " + json.dumps(body, ensure_ascii=False))
+    try:
+        client.cancel_order("20200529A01N06848002")
+        print("[受付] 取消")
+    except KabuApiError as e:
+        if '"Code":4004001' in e.body.replace(" ", ""):
+            print("[受付] 取消: 該当する注文が無いという応答（形式は正しい）")
+        else:
+            bad += 1
+            print(f"[拒否] 取消: {e}")
+    for label, call in (("注文照会", lambda: client.orders()),
                         ("建玉照会", lambda: client.positions(product=2))):
         try:
-            res = call()
-            print(f"[受付] {label}" + (f": {len(res)} 件" if isinstance(res, list) else ""))
+            print(f"[受付] {label}: {len(call())} 件")
         except Exception as e:
-            ok = False
+            bad += 1
             print(f"[拒否] {label}: {e}")
-    print("\nすべて受け付けられました。" if ok else "\n拒否された項目があります。上の内容を開発者に伝えてください。")
-    return 0 if ok else 1
+    print("\n形式の誤りは見つかりませんでした。" if not bad
+          else "\n拒否された項目があります。上の内容を開発者に伝えてください。")
+    return 0 if not bad else 1
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -167,6 +167,7 @@ class LiveEngine(PaperEngine):
             self._tell("買い注文が成立しませんでした", self._label(t), t.symbol)
             return
         t.qty = st.cum_qty
+        t.holds = ",".join(f"{i}:{q}" for i, q in st.fills)
         t.entry_price = st.avg_price or t.entry_price
         t.entry_time = now
         t.high = t.entry_price
@@ -191,7 +192,8 @@ class LiveEngine(PaperEngine):
             return
         trig = trigger_price(t.stop, t.tick_group)
         try:
-            t.stop_order = self.broker.place_stop(t.symbol, t.qty - t.exit_qty, trig)
+            t.stop_order = self.broker.place_stop(t.symbol, t.qty - t.exit_qty, trig,
+                                                  self._holds(t))
             t.server_stop = trig
             self._last_replace[t.id] = now
             log.info("逆指値 %s トリガ%.1f 注文番号%s", self._label(t), trig, t.stop_order)
@@ -200,6 +202,10 @@ class LiveEngine(PaperEngine):
                                             f"このプログラムが価格を監視して決済します。（{e}）")
             self._tell("逆指値を出せませんでした", f"{self._label(t)}: プログラムの監視に切り替えます",
                        t.symbol)
+
+    def _holds(self, t: Trade):
+        """返済する建玉の指定。一部だけ決済済みのときは、どの建玉が残っているか分からないので指定しない。"""
+        return t.hold_list() if t.exit_qty == 0 else None
 
     def _take_fills(self, t: Trade, st, price_hint: float | None) -> None:
         """売り注文の約定分を取引に反映する。"""
@@ -299,7 +305,7 @@ class LiveEngine(PaperEngine):
             self.warnings[f"exit{t.id}"] = f"{self._label(t)}: 決済注文が成立しませんでした。再度発注します。"
             self._next[t.id] = now + RETRY
             return
-        t.exit_order = self.broker.close_market(t.symbol, t.qty - t.exit_qty)
+        t.exit_order = self.broker.close_market(t.symbol, t.qty - t.exit_qty, self._holds(t))
         self.store.save_trade(t)
         self.warnings.pop(f"exit{t.id}", None)
         log.info("返済注文 %s %d株 成行 注文番号%s", self._label(t), t.qty - t.exit_qty, t.exit_order)

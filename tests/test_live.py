@@ -25,6 +25,7 @@ class FakeBroker:
         self.fail = set()          # 'buy' | 'stop' | 'close' を入れると発注が例外になる
         self.auto_fill = {"buy": None, "close": None}   # 価格を入れると即約定
         self.held = {}
+        self.holds_seen = []
 
     def _new(self, kind, symbol, qty, trigger=None):
         if kind in self.fail:
@@ -41,10 +42,12 @@ class FakeBroker:
     def buy_market(self, symbol, qty):
         return self._new("buy", symbol, qty)
 
-    def close_market(self, symbol, qty):
+    def close_market(self, symbol, qty, holds=None):
+        self.holds_seen.append(holds)
         return self._new("close", symbol, qty)
 
-    def place_stop(self, symbol, qty, trigger):
+    def place_stop(self, symbol, qty, trigger, holds=None):
+        self.holds_seen.append(holds)
         return self._new("stop", symbol, qty, trigger)
 
     def cancel(self, oid):
@@ -61,7 +64,8 @@ class FakeBroker:
 
     def order(self, oid):
         o = self.orders[oid]
-        return OrderStatus(o["done"], o["cum"], o["price"])
+        fills = ((f"E-{oid}", o["cum"]),) if o["kind"] == "buy" and o["cum"] else ()
+        return OrderStatus(o["done"], o["cum"], o["price"], fills)
 
     def positions(self):
         return {s: q for s, q in self.held.items() if q > 0}
@@ -348,7 +352,7 @@ def test_kabu_broker_over_http(monkeypatch):
             calls.append(("GET", self.path, None))
             if "/orders" in self.path:
                 return self._send([{"ID": "ID1", "State": 5, "CumQty": 100, "Details": [
-                    {"RecType": 8, "Qty": 100, "Price": 2500.5}]}])
+                    {"RecType": 8, "Qty": 100, "Price": 2500.5, "ExecutionID": "E77"}]}])
             if "/positions" in self.path:
                 return self._send([{"Symbol": "7203", "Side": "2", "LeavesQty": 100},
                                    {"Symbol": "7203", "Side": "2", "LeavesQty": 200},
@@ -370,7 +374,7 @@ def test_kabu_broker_over_http(monkeypatch):
         assert calls[-1][2]["ReverseLimitOrder"]["TriggerPrice"] == 2490
         b.cancel("ID1")
         assert calls[-1] == ("PUT", "/kabusapi/cancelorder", {"OrderId": "ID1"})
-        assert b.order("ID1") == OrderStatus(True, 100, 2500.5)
+        assert b.order("ID1") == OrderStatus(True, 100, 2500.5, (("E77", 100),))
         assert "id=ID1" in calls[-1][1]
         assert b.order("NOPE") == OrderStatus(False)
         assert b.positions() == {"7203": 300}                    # 買建だけを合計する
@@ -379,3 +383,37 @@ def test_kabu_broker_over_http(monkeypatch):
             b.buy_market("7203", 999)                            # 拒否は例外になる
     finally:
         srv.shutdown()
+
+
+def test_repay_targets_the_position_opened_by_this_trade():
+    b = KabuBroker(None)
+    body = b.stop_body("7203", 400, 994, [("E1", 100), ("E2", 300)])
+    assert body["ClosePositions"] == [{"HoldID": "E1", "Qty": 100}, {"HoldID": "E2", "Qty": 300}]
+    assert "ClosePositionOrder" not in body
+    assert b.close_body("7203", 100, [("E1", 100), ("E2", 300)])["ClosePositions"] == [
+        {"HoldID": "E1", "Qty": 100}]
+    assert b.close_body("7203", 400, [("E1", 100)])["ClosePositionOrder"] == 0   # 足りなければ指定しない
+    e, br, _, _ = make()
+    br.auto_fill["buy"] = 1007
+    t0 = signal(e)
+    e.on_price("7203", 1006, t0 + timedelta(seconds=1))
+    e.on_clock(t0 + timedelta(seconds=3))
+    assert e.open[0].holds == "E-O1:400" and br.holds_seen == [[("E-O1", 400)]]
+
+
+def test_sell_falls_back_when_position_id_is_rejected():
+    from candle.kabu_client import KabuApiError
+
+    class C:
+        def __init__(self):
+            self.bodies = []
+
+        def send_order(self, body):
+            self.bodies.append(body)
+            if "ClosePositions" in body:
+                raise KabuApiError(400, "建玉が選択されていません。")
+            return "OK1"
+
+    c = C()
+    assert KabuBroker(c).close_market("7203", 100, [("E1", 100)]) == "OK1"
+    assert len(c.bodies) == 2 and c.bodies[1]["ClosePositionOrder"] == 0

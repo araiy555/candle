@@ -58,6 +58,10 @@ class Trade:
     tick_group: str = "10000"
     exit_qty: int = 0             # 決済済みの株数（分割約定の途中経過）
     exit_value: float = 0.0       # 決済済みの約定代金
+    holds: str = ""               # 買いの約定番号と株数（"E123:100,E124:300"）。返済する建玉の指定に使う
+
+    def hold_list(self) -> list[tuple[str, int]]:
+        return [(a, int(b)) for a, b in (x.split(":") for x in self.holds.split(",") if ":" in x)]
 
     @property
     def risk(self) -> float:

@@ -62,7 +62,8 @@ class Store:
                           ("exit_order", "TEXT NOT NULL DEFAULT ''"), ("server_stop", "REAL"),
                           ("tick_group", "TEXT NOT NULL DEFAULT '10000'"),
                           ("exit_qty", "INTEGER NOT NULL DEFAULT 0"),
-                          ("exit_value", "REAL NOT NULL DEFAULT 0")):
+                          ("exit_value", "REAL NOT NULL DEFAULT 0"),
+                          ("holds", "TEXT NOT NULL DEFAULT ''")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
         self.conn.commit()
@@ -134,7 +135,7 @@ class Store:
                    "qty", "initial_stop", "stop", "high", "exit_time", "exit_price", "exit_reason",
                    "trail_mode", "trail_value", "pattern_low", "state", "entry_order",
                    "stop_order", "exit_order", "server_stop", "tick_group", "exit_qty",
-                   "exit_value")
+                   "exit_value", "holds")
     _TIME_COLS = ("signal_time", "entry_time", "exit_time")
 
     def save_trade(self, t: Trade) -> None:
