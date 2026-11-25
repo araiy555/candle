@@ -312,3 +312,17 @@ def test_manual_close_of_one_position_from_dashboard():
     done = [t for t in store.load_trades("paper") if not t.is_open]
     assert len(done) == 1 and done[0].exit_reason == "手動決済"
     assert e.snapshot["positions"][0]["id"] == b.id
+
+
+def test_next_raise_shows_when_the_stop_will_move():
+    t = trade(entry=595.9, stop=592.9)                           # R = 3.0
+    lvl, new = t.next_raise()
+    assert round(lvl, 1) == 598.9 and round(new, 1) == 595.9     # +1Rで建値へ
+    t.trail(597.0)
+    assert round(t.next_raise()[0], 1) == 598.9 and t.stop == 592.9
+    t.trail(599.0)
+    assert round(t.stop, 1) == 595.9
+    lvl, new = t.next_raise()
+    assert round(lvl, 1) == 601.9 and round(new, 1) == 598.9     # 次は+2Rで+1Rへ
+    assert Trade("paper", "x", "A", T0, T0, 100, 100, 99, 99, trail_mode="percent",
+                 trail_value=0.5).next_raise() is None

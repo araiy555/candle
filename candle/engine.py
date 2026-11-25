@@ -231,6 +231,7 @@ class PaperEngine:
                 state=self.state_label(t), name=self.names.get(t.symbol),
                 signal_time=t.signal_time.isoformat(), entry_price=t.entry_price, price=px,
                 initial_stop=t.initial_stop, stop=t.stop,
+                next_raise=t.next_raise(), trail_mode=t.trail_mode, trail_value=t.trail_value,
                 pnl=None if px is None else t.pnl(px),
                 r=None if px is None else t.r_multiple(px),
                 hold_min=(now - t.entry_time).total_seconds() / 60))

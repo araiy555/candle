@@ -91,6 +91,8 @@ function table(el,heads,rows,empty){
 }
 let halted=false,state=null,cur=null,formLoaded=false;const closing=new Set();
 const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss','max_hold_min'];
+function nextRaise(p){if(p.next_raise)return `${n(p.next_raise[0],1)} で ${n(p.next_raise[1],1)} へ`;
+  if(p.trail_mode==='percent')return `<span class="mut">高値の${n(p.trail_value,2)}%下</span>`;if(p.trail_mode==='yen')return `<span class="mut">高値の${n(p.trail_value,1)}円下</span>`;return '<span class="mut">なし</span>'}
 function example(){
   const E=1000,LOW=995,Q=100,f=v=>n(v,1),sm=$('stop_mode').value,sv=parseFloat($('stop_value').value)||0,tm=$('trail_mode').value,tv=parseFloat($('trail_value').value)||0;
   const stop=sm==='percent'?E*(1-sv/100):sm==='yen'?E-sv:LOW,R=E-stop;
@@ -123,9 +125,9 @@ async function load(){
   $('kpis').innerHTML=[['含み損益',yen(unreal)+' 円'],['本日の確定損益',yen(d.realized_today)+' 円'],
     ['投資額 / 上限',n(d.exposure)+' / '+n(d.limits.total_cap)+' 円'],['1日の最大損失',n(d.limits.daily_max_loss)+' 円'],
     ['保有数',d.positions.length]].map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('');
-  table('positions',['戦略','銘柄','状態','株数','サイン時刻','エントリー','現在値','初期損切り','現在の損切り','含み損益','R','保有時間',''],
+  table('positions',['戦略','銘柄','状態','株数','サイン時刻','エントリー','現在値','初期損切り','現在の損切り','次の引き上げ','含み損益','R','保有時間',''],
     d.positions.map(p=>[esc(p.strategy),`<button class="link" data-sym="${esc(p.symbol)}">${esc(p.symbol)} ${esc(p.name||'')}</button>`,esc(p.state),n(p.qty),hm(p.signal_time),n(p.entry_price,1),n(p.price,1),n(p.initial_stop,1),
-      n(p.stop,1),yen(p.pnl),rr(p.r),n(p.hold_min)+'分',closing.has(p.id)||p.state==='決済中'?'<span class="mut">決済中…</span>':`<button data-close="${p.id}" data-label="${esc(p.symbol)} ${esc(p.name||'')} ${n(p.qty)}株" style="padding:2px 12px">決済</button>`]),'保有ポジションはありません');
+      n(p.stop,1),nextRaise(p),yen(p.pnl),rr(p.r),n(p.hold_min)+'分',closing.has(p.id)||p.state==='決済中'?'<span class="mut">決済中…</span>':`<button data-close="${p.id}" data-label="${esc(p.symbol)} ${esc(p.name||'')} ${n(p.qty)}株" style="padding:2px 12px">決済</button>`]),'保有ポジションはありません');
   for(const id of [...closing])if(!d.positions.some(p=>p.id===id))closing.delete(id);
   table('stats',['戦略','取引数','勝率','PF','期待損益(円)','期待値(R)','合計損益(円)','平均保有'],
     d.stats.map(s=>[esc(s.strategy),s.trades,s.win_rate==null?'-':n(s.win_rate*100,1)+'%',s.pf==null?'-':n(s.pf,2),

@@ -95,6 +95,13 @@ class Trade:
             return True
         return False
 
+    def next_raise(self) -> tuple[float, float] | None:
+        """次に損切りラインが上がる株価と、そのときの新しい損切りライン（R方式のみ）。"""
+        if self.trail_mode != "r_step" or self.risk <= 0:
+            return None
+        n = max(0, int((self.high - self.entry_price) // self.risk))
+        return self.entry_price + (n + 1) * self.risk, self.entry_price + n * self.risk
+
     def close(self, time: datetime, price: float, reason: str) -> None:
         self.exit_time, self.exit_price, self.exit_reason = time, price, reason
 
