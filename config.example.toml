@@ -45,8 +45,8 @@ strategies = ["tweezer_bottom"]
 port = 8765                # 管理画面 http://localhost:8765 （このPCからのみ閲覧可）
 
 [notify]
-# watch（通知のみ）モードで通知する戦略ID
-strategies = ["tweezer_bottom"]
+# 通知する戦略ID（squeeze は板と約定の流れによる検出）
+strategies = ["tweezer_bottom", "squeeze"]
 desktop = true             # Windowsのデスクトップ通知
 sound = true               # 通知音
 copy_code = true           # 通知と同時に銘柄コードをコピーする（kabuステーションに貼り付け用）

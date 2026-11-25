@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 
 # 記録・足生成に使う項目だけを残す（板全体は保存しない）
 RAW_FIELDS = ("Symbol", "CurrentPrice", "CurrentPriceTime", "TradingVolume", "TradingValue",
-              "VWAP", "HighPrice", "LowPrice", "BidPrice", "AskPrice")
+              "VWAP", "HighPrice", "LowPrice", "BidPrice", "AskPrice", "BidQty", "AskQty")
 
 
 def _parse_time(value) -> datetime | None:
@@ -36,12 +36,14 @@ class Pipeline:
 
     def __init__(self, store: Store, minutes: int = 5, raw_dir: Path | None = None,
                  on_bar: Callable[[Bar], None] | None = None,
-                 on_price: Callable[[str, float, datetime], None] | None = None):
+                 on_price: Callable[[str, float, datetime], None] | None = None,
+                 on_board: Callable[[str, dict, datetime], None] | None = None):
         self.store = store
         self.builder = BarBuilder(minutes)
         self.raw_dir = raw_dir
         self.on_bar = on_bar
         self.on_price = on_price
+        self.on_board = on_board
         self.messages = 0
         self._raw_file = None
         self._raw_day = None
@@ -51,6 +53,8 @@ class Pipeline:
         slim = {k: msg.get(k) for k in RAW_FIELDS}
         if self.raw_dir is not None:
             self._record(slim, recv or datetime.now(JST))
+        if self.on_board and slim["Symbol"]:
+            self.on_board(str(slim["Symbol"]), msg, recv or datetime.now(JST))
         ts = _parse_time(slim["CurrentPriceTime"])
         if ts is None or not slim["Symbol"]:
             return []
@@ -130,6 +134,10 @@ class _EngineSink:
         if self.engine:
             self.engine.on_clock(now)
 
+    def on_board(self, symbol, msg, now) -> None:
+        if self.engine:
+            self.engine.on_board(symbol, msg, now)
+
     def set_feed(self, ok: bool) -> None:
         if self.engine:
             self.engine.risk.feed_ok = ok
@@ -163,7 +171,7 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
     else:
         sink = _EngineSink(cfg, engine_factory(store) if engine_factory else None)
     pipe = Pipeline(store, cfg.bar_minutes, cfg.data_dir / "raw" if cfg.record_raw else None,
-                    on_bar=sink.on_bar, on_price=sink.on_price)
+                    on_bar=sink.on_bar, on_price=sink.on_price, on_board=sink.on_board)
     feed = sink.set_feed
 
     async def flusher():

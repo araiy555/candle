@@ -125,7 +125,8 @@ class LiveEngine(PaperEngine):
                 self.warnings["entry"] = (f"{symbol} の買い注文でエラーが出たため、新規の買いを停止しました。"
                                           f"kabuステーションで注文と建玉を確認してください。（{e}）")
                 self._tell("買い注文エラー・新規停止", f"{symbol}: {e}", symbol)
-        self.store.add_signal(self.mode, strategy_id, symbol, sig_time, price, low, why)
+        self.store.add_signal(self.mode, strategy_id, symbol, sig_time, price, low, why,
+                              self.notes.pop((strategy_id, symbol, sig_time.isoformat()), ""))
         if qty <= 0:
             log.info("見送り %s %s: %s", strategy_id, symbol, why)
             return

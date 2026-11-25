@@ -41,6 +41,9 @@ class App:
     def on_price(self, symbol, price, ts) -> None:
         self.engine.on_price(symbol, price, ts)
 
+    def on_board(self, symbol, msg, now) -> None:
+        self.engine.on_board(symbol, msg, now)
+
     def on_clock(self, now: datetime) -> None:
         if self.want and self.want != self.mode:
             self.engine = self._build(self.want, self.engine)
@@ -107,5 +110,7 @@ class App:
             engine.watchlist, engine.names = old.watchlist, old.names
             engine.auto_chart = old.auto_chart
             engine.risk.feed_ok = old.risk.feed_ok
+            if engine.flow is not None and old.flow is not None:
+                engine.flow = old.flow   # 直近の約定の流れも引き継ぐ
             engine.snapshot = {}
         return engine

@@ -10,7 +10,8 @@ from collections import defaultdict, deque
 from datetime import datetime, time
 
 from .bars import JST, SESSIONS, Bar
-from .patterns import STRATEGIES, STRATEGY_BY_ID, Params, contiguous_tail
+from .flow import FlowDetector, FlowParams
+from .patterns import FLOW_STRATEGY, STRATEGIES, STRATEGY_BY_ID, Params, contiguous_tail
 from .risk import RiskManager
 from .settings import TradeSettings
 from .store import Store
@@ -27,7 +28,7 @@ class PaperEngine:
                  slippage: float = 0.0005, exit_after: time = time(15, 20),
                  enabled: set[str] | None = None, trade_enabled: bool = True,
                  notify=None, notify_ids: set[str] | None = None,
-                 settings: TradeSettings | None = None):
+                 settings: TradeSettings | None = None, flow_params: FlowParams | None = None):
         self.store, self.risk = store, risk
         self.settings = settings or TradeSettings(
             per_trade_cap=risk.limits.per_symbol_cap, total_cap=risk.limits.total_cap,
@@ -41,6 +42,11 @@ class PaperEngine:
         self.params = params or Params()
         self.slippage, self.exit_after = slippage, exit_after
         self.strategies = [s for s in STRATEGIES if enabled is None or s.id in enabled]
+        ids = {s.id for s in self.strategies}
+        want_flow = FLOW_STRATEGY in ids or (notify_ids is not None and FLOW_STRATEGY in notify_ids)
+        self.flow = FlowDetector(flow_params) if want_flow else None
+        self.flow_trades = FLOW_STRATEGY in ids      # スクイーズで売買もするか（通知だけなら False）
+        self.notes: dict[tuple[str, str, str], str] = {}
         self.history: dict[str, deque[Bar]] = defaultdict(lambda: deque(maxlen=400))  # 1分足でも当日分が収まる
         self.prices: dict[str, float] = {}
         self.watchlist: list[str] = []
@@ -103,6 +109,31 @@ class PaperEngine:
             else:
                 self.store.add_signal(self.mode, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ")
 
+    def on_board(self, symbol: str, msg: dict, now: datetime) -> None:
+        """配信1件ごとに呼ばれる。板と約定の流れからスクイーズを判定する。"""
+        if self.flow is None or now.astimezone(JST).time() >= self.exit_after:
+            return
+        sig = self.flow.update(symbol, msg, now)
+        if sig is None:
+            return
+        name = STRATEGY_BY_ID[FLOW_STRATEGY].name
+        key = (FLOW_STRATEGY, symbol, sig.time.isoformat())
+        if key in self.seen:
+            return
+        self.seen.add(key)
+        log.info("サイン %s %s %s", name, symbol, sig.note)
+        if self.notify and (self.notify_ids is None or FLOW_STRATEGY in self.notify_ids):
+            label = f"{symbol} {self.names.get(symbol) or ''}".strip()
+            self.notify(f"{name}  {label}", f"{sig.time:%H:%M:%S} {sig.price:,.1f}円　{sig.note}", symbol)
+        if self.auto_chart and self.on_auto_chart:
+            self.on_auto_chart(symbol)
+        if self.trade_enabled and self.flow_trades:
+            self.notes[key] = sig.note
+            self.pending[symbol].append((FLOW_STRATEGY, sig.time, sig.low))
+        else:
+            self.store.add_signal(self.mode, FLOW_STRATEGY, symbol, sig.time, sig.price, sig.low,
+                                  "通知のみ", sig.note)
+
     def on_price(self, symbol: str, price: float, ts: datetime) -> None:
         self.prices[symbol] = price
         self.last_tick = datetime.now(JST)
@@ -144,7 +175,8 @@ class PaperEngine:
         st = self.settings
         stop = st.initial_stop(entry, low)
         qty, why = self._check(strategy_id, symbol, entry, stop, ts)
-        self.store.add_signal(self.mode, strategy_id, symbol, sig_time, price, low, why)
+        self.store.add_signal(self.mode, strategy_id, symbol, sig_time, price, low, why,
+                              self.notes.pop((strategy_id, symbol, sig_time.isoformat()), ""))
         if qty <= 0:
             log.info("見送り %s %s: %s", strategy_id, symbol, why)
             return

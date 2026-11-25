@@ -132,8 +132,8 @@ async function load(){
   table('stats',['戦略','取引数','勝率','PF','期待損益(円)','期待値(R)','合計損益(円)','平均保有'],
     d.stats.map(s=>[esc(s.strategy),s.trades,s.win_rate==null?'-':n(s.win_rate*100,1)+'%',s.pf==null?'-':n(s.pf,2),
       yen(s.expectancy),rr(s.expectancy_r),yen(s.total),s.avg_hold_min==null?'-':n(s.avg_hold_min)+'分']),'');
-  table('signals',['戦略','銘柄','発生時刻','価格','パターン安値','結果'],
-    d.signals.map(s=>[esc(s.strategy),`<button class="link" data-sym="${esc(s.symbol)}">${esc(s.symbol)} ${esc(s.name||'')}</button> <button data-kabu="${esc(s.symbol)}" style="padding:1px 8px;font-size:12px">kabuステで表示</button>`,md(s.time),n(s.price,1),n(s.pattern_low,1),
+  table('signals',['戦略','銘柄','発生時刻','価格','安値','内容','結果'],
+    d.signals.map(s=>[esc(s.strategy),`<button class="link" data-sym="${esc(s.symbol)}">${esc(s.symbol)} ${esc(s.name||'')}</button> <button data-kabu="${esc(s.symbol)}" style="padding:1px 8px;font-size:12px">kabuステで表示</button>`,md(s.time),n(s.price,1),n(s.pattern_low,1),`<span class="l mut" style="white-space:normal;display:inline-block;max-width:420px;text-align:left">${esc(s.note||'')}</span>`,
       s.action==='entry'?'エントリー':s.action==='通知のみ'?'通知':'<span class="mut">見送り: '+esc(s.action)+'</span>']),'まだサインはありません');
   table('history',['戦略','銘柄','株数','買い','買値','決済','売値','理由','損益(円)','R'],
     d.history.map(t=>[esc(t.strategy),esc(t.symbol),n(t.qty),md(t.entry_time),n(t.entry_price,1),md(t.exit_time),n(t.exit_price,1),
@@ -168,7 +168,7 @@ function draw(data){
     const top=y(Math.max(b.o,b.c)),h=Math.max(1,y(Math.min(b.o,b.c))-top);
     g.appendChild(el('rect',{x:x(i)-w/2,y:top,width:w,height:h,fill:col}));svg.appendChild(g)});
   const ms=(data.minutes||5)*60000;
-  for(const m of marks){const i=bars.findIndex(b=>Date.parse(b.t)+ms===Date.parse(m.time));if(i<0)continue;
+  for(const m of marks){const mt=Date.parse(m.time);let i=bars.findIndex(b=>Date.parse(b.t)+ms===mt);if(i<0)i=bars.findIndex(b=>mt>=Date.parse(b.t)&&mt<Date.parse(b.t)+ms);if(i<0&&bars.length&&mt>=Date.parse(bars[bars.length-1].t)+ms)i=bars.length-1;if(i<0)continue;
     const py=y(m.pattern_low);
     svg.appendChild(el('line',{x1:x(i)-bw,x2:W-R,y1:py,y2:py,stroke:'var(--fg)','stroke-width':1,'stroke-dasharray':'4 3',opacity:.6}));
     svg.appendChild(el('path',{d:`M${x(i)},${py+6} l6,10 h-12 z`,fill:'var(--fg)'}));

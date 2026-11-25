@@ -181,5 +181,8 @@ STRATEGIES: tuple[Strategy, ...] = (
     Strategy("piercing_line", "切り込み線", piercing_line),
     Strategy("bullish_harami", "強気はらみ線", bullish_harami),
     Strategy("double_bottom", "二点底", double_bottom),
+    # 板と約定の流れによる検出。足のパターンではないので、ここでは判定しない（flow.py が行う）。
+    Strategy("squeeze", "スクイーズ", lambda bars, p: None),
 )
+FLOW_STRATEGY = "squeeze"
 STRATEGY_BY_ID = {s.id: s for s in STRATEGIES}

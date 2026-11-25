@@ -66,6 +66,8 @@ class Store:
                           ("holds", "TEXT NOT NULL DEFAULT ''")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
+        if "note" not in {r[1] for r in self.conn.execute("PRAGMA table_info(signals)")}:
+            self.conn.execute("ALTER TABLE signals ADD COLUMN note TEXT NOT NULL DEFAULT ''")
         self.conn.commit()
 
     def save_bars(self, bars: list[Bar], source: str = "kabu_push",
@@ -130,18 +132,18 @@ class Store:
             "SELECT DISTINCT symbol FROM bars WHERE minutes=? ORDER BY symbol", (minutes,))]
 
     def add_signal(self, mode: str, strategy_id: str, symbol: str, time: datetime,
-                   price: float, pattern_low: float, action: str) -> None:
+                   price: float, pattern_low: float, action: str, note: str = "") -> None:
         self.conn.execute(
-            "INSERT INTO signals (mode,strategy_id,symbol,time,price,pattern_low,action) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (mode, strategy_id, symbol, time.isoformat(), price, pattern_low, action))
+            "INSERT INTO signals (mode,strategy_id,symbol,time,price,pattern_low,action,note) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (mode, strategy_id, symbol, time.isoformat(), price, pattern_low, action, note))
         self.conn.commit()
 
     def recent_signals(self, mode: str, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT strategy_id,symbol,time,price,pattern_low,action FROM signals "
+            "SELECT strategy_id,symbol,time,price,pattern_low,action,note FROM signals "
             "WHERE mode=? ORDER BY id DESC LIMIT ?", (mode, limit)).fetchall()
-        keys = ("strategy_id", "symbol", "time", "price", "pattern_low", "action")
+        keys = ("strategy_id", "symbol", "time", "price", "pattern_low", "action", "note")
         return [dict(zip(keys, r)) for r in rows]
 
     _TRADE_COLS = ("mode", "strategy_id", "symbol", "signal_time", "entry_time", "entry_price",
