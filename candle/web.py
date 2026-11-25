@@ -63,7 +63,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <div><label for="total_cap">同時に持つ合計の上限（円）</label><div class="row"><input id="total_cap" type="number" step="10000" min="0" style="width:100%"></div></div>
 <div><label for="daily_max_loss">1日の最大損失（円）</label><div class="row"><input id="daily_max_loss" type="number" step="1000" min="0" style="width:100%"></div></div>
 <div><div class="row" style="align-items:center"><button id="save">設定を保存</button><span class="mut" id="savemsg" style="font-size:12px"></span></div></div>
-</div><div class="note" style="padding:10px 0 0">変更は次の買いから適用します。保有中のポジションの損切り・トレーリングは、買った時点の設定のままです。</div></section>
+</div><div id="example" style="margin-top:12px;font-size:13px"></div><div class="note" style="padding:10px 0 0">変更は次の買いから適用します。保有中のポジションの損切り・トレーリングは、買った時点の設定のままです。</div></section>
 <section data-trade><h2>保有ポジション</h2><div id="positions"></div></section>
 <section data-trade><h2>戦略別成績</h2><div id="stats"></div></section>
 <section><h2>検出されたサイン</h2><div id="signals"></div></section>
@@ -90,7 +90,17 @@ function table(el,heads,rows,empty){
 }
 let halted=false,state=null,cur=null,formLoaded=false;
 const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss'];
-function syncForm(){$('stop_value').disabled=$('stop_mode').value==='pattern_low';$('trail_value').disabled=!['percent','yen'].includes($('trail_mode').value)}
+function example(){
+  const E=1000,LOW=995,Q=100,f=v=>n(v,1),sm=$('stop_mode').value,sv=parseFloat($('stop_value').value)||0,tm=$('trail_mode').value,tv=parseFloat($('trail_value').value)||0;
+  const stop=sm==='percent'?E*(1-sv/100):sm==='yen'?E-sv:LOW,R=E-stop;
+  if(!(R>0)){$('example').innerHTML='<span class="ng">損切りラインが買値以上になっています。数値を見直してください。</span>';return}
+  const line=h=>{let s=stop;if(tm==='r_step'){const k=Math.floor((h-E)/R+1e-9);if(k>=1)s=Math.max(s,E+(k-1)*R)}else if(tm==='percent'&&tv>0)s=Math.max(s,h*(1-tv/100));else if(tm==='yen'&&tv>0)s=Math.max(s,h-tv);return s};
+  const highs=[E,E+R,E+2*R,E+3*R,E+5*R];
+  $('example').innerHTML=`<b>数字での例</b>（${f(E)}円で${Q}株買い、パターンの安値が${f(LOW)}円の場合）<br>`+
+    `最初の損切りライン：<b>${f(stop)}円</b>（買値から ${f(-R)}円、ここで決済すると <span class="neg">${n(-R*Q)}円</span>）`+
+    '<table style="margin-top:6px;width:auto"><thead><tr><th>買った後の高値</th><th>損切りライン</th><th>そこで決済した場合の損益</th></tr></thead><tbody>'+
+    highs.map(h=>{const s=line(h),pl=(s-E)*Q;return `<tr><td>${f(h)}円</td><td>${f(s)}円</td><td>${pl>0?'<span class="pos">+'+n(pl)+'円</span>':pl<0?'<span class="neg">'+n(pl)+'円</span>':'0円'}</td></tr>`}).join('')+'</tbody></table>'}
+function syncForm(){example();$('stop_value').disabled=$('stop_mode').value==='pattern_low';$('trail_value').disabled=!['percent','yen'].includes($('trail_mode').value)}
 async function load(){
   let d;try{d=await (await fetch('/api/state')).json()}catch(e){$('feed').innerHTML='<span class="ng">プログラム停止中</span>';return}
   if(!d.time){$('time').textContent='起動中…';return}
@@ -182,6 +192,7 @@ document.querySelectorAll('#modes button').forEach(b=>b.onclick=async()=>{const 
   if(m==='live'){const a=prompt('本番に切り替えます。毛抜き底のサインが出ると、確認なしで実際に信用取引の買い注文を出します。\n開始するには yes と入力してください。');if((a||'').trim().toLowerCase()!=='yes')return}
   try{const r=await (await fetch('/api/mode?m='+m,{method:'POST'})).json();if(!r.ok)alert(r.message)}catch(e){alert('切り替えできませんでした')}load()});
 $('stop_mode').onchange=$('trail_mode').onchange=syncForm;
+$('stop_value').oninput=$('trail_value').oninput=example;
 $('save').onclick=async()=>{const body={};for(const k of FIELDS)body[k]=$(k).value;
   try{const r=await (await fetch('/api/settings',{method:'POST',body:JSON.stringify(body)})).json();$('savemsg').textContent=r.message;if(r.ok)formLoaded=false}catch(e){$('savemsg').textContent='保存できませんでした'}};
 $('closeall').onclick=async()=>{if(!confirm('保有中のすべてのポジションを成行で決済します。よろしいですか？'))return;await fetch('/api/close-all',{method:'POST'});load()};
