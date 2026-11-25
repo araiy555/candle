@@ -8,6 +8,84 @@ import sys
 from .config import load_config
 
 
+def launch_login(cfg) -> str:
+    """APIパスワードを用意して接続を確かめる。成功したパスワードを返す（失敗時は空文字）。
+
+    一度成功したパスワードは暗号化して保存し、次回からは入力を省く。
+    """
+    import getpass
+    import os
+
+    from . import secretstore
+    from .kabu_client import KabuApiError, KabuClient
+
+    password = os.environ.get("KABU_API_PASSWORD", "")
+    from_store = False
+    if not password:
+        password = secretstore.load()
+        from_store = bool(password)
+    for _ in range(5):
+        if not password:
+            print("本番用のAPIパスワードを入力して Enter を押してください（入力した文字は表示されません）")
+            password = getpass.getpass("APIパスワード: ").strip()
+            from_store = False
+            if not password:
+                continue
+        try:
+            KabuClient(cfg.rest_url, password).token()
+        except KabuApiError as e:
+            if e.status == 401:
+                print("APIパスワードが違います。" + ("保存していたパスワードを削除しました。" if from_store else ""))
+                secretstore.delete()
+                password = ""
+                continue
+            print(e)
+            return ""
+        except Exception:
+            print(f"kabuステーションに接続できません（ポート{cfg.port}）。")
+            print("kabuステーションを起動してログインしてから、Enter を押してください。")
+            try:
+                input()
+            except EOFError:
+                return ""
+            continue
+        if not from_store and secretstore.save(password):
+            print("APIパスワードを暗号化して保存しました。次回からは入力不要です。")
+        print("kabuステーションに接続しました。")
+        return password
+    return ""
+
+
+def run_app(cfg, open_browser: bool = False) -> int:
+    """起動する。モードの切り替えと設定はブラウザの管理画面で行う。"""
+    from .app import App
+    from .collector import run_collector
+    from .kabuwin import show_chart_async
+    from .notify import Notifier
+    from .web import start_web
+
+    cfg.universe_size = 50   # 登録上限いっぱいまで監視する
+    notifier = Notifier(cfg.notify_desktop, cfg.notify_sound, cfg.webhook_url,
+                        cfg.notify_copy_code)
+    app = App(cfg, notify=notifier.send, chart_switcher=show_chart_async)
+    if not app.password:
+        print("APIパスワードがありません。start.bat から起動してください。")
+        return 1
+    start_web(app, cfg.web_port, cfg.data_dir)
+    url = f"http://localhost:{cfg.web_port}"
+    print(f"管理画面: {url}")
+    print("モードの切り替えと設定は管理画面で行います。起動直後は「通知のみ」です。")
+    print("この画面を閉じると、プログラムが止まります。")
+    if open_browser:
+        import webbrowser
+        webbrowser.open(url)
+    try:
+        asyncio.run(run_collector(cfg, app=app))
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def order_check(cfg) -> int:
     """検証用環境に、本番と同じ形の注文を送って応答を表示する。実際の注文にはならない。"""
     import getpass
@@ -80,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--inspect", action="store_true", help="チャート画面の構造を表示する（調査用）")
     sub.add_parser("check", help="接続確認（トークン発行とランキング取得のみ）")
     sub.add_parser("collect", help="PUSH配信を受信して5分足を保存する")
+    sub.add_parser("launch", help="start.bat 用: パスワードの用意と接続確認をしてから起動し、ブラウザを開く")
+    sub.add_parser("forget-password", help="保存したAPIパスワードを削除する")
     sub.add_parser("run", help="起動する。モードの切り替えと設定はブラウザの管理画面で行う")
     sub.add_parser("watch", help="売買代金上位50銘柄を監視し、サインが出たら通知する（売買なし）")
     sub.add_parser("paper", help="テスト: 仮想売買と管理画面を起動する（実際の注文は出さない）")
@@ -155,29 +235,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "order-check":
         return order_check(cfg)
 
-    if args.cmd == "run":
-        from .app import App
-        from .collector import run_collector
-        from .kabuwin import show_chart_async
-        from .notify import Notifier
-        from .web import start_web
-
-        cfg.universe_size = 50   # 登録上限いっぱいまで監視する
-        notifier = Notifier(cfg.notify_desktop, cfg.notify_sound, cfg.webhook_url,
-                            cfg.notify_copy_code)
-        app = App(cfg, notify=notifier.send, chart_switcher=show_chart_async)
-        if not app.password:
-            print("環境変数 KABU_API_PASSWORD が設定されていません。start.bat から起動してください。")
-            return 1
-        start_web(app, cfg.web_port, cfg.data_dir)
-        print(f"管理画面: http://localhost:{cfg.web_port}")
-        print("モードの切り替えと設定は管理画面で行います。起動直後は「通知のみ」です。")
-        print("この画面を閉じると、プログラムが止まります。")
-        try:
-            asyncio.run(run_collector(cfg, app=app))
-        except KeyboardInterrupt:
-            pass
+    if args.cmd == "forget-password":
+        from . import secretstore
+        print("保存していたAPIパスワードを削除しました。" if secretstore.delete()
+              else "保存されたAPIパスワードはありません。")
         return 0
+
+    if args.cmd == "launch":
+        password = launch_login(cfg)
+        if not password:
+            return 1
+        import os
+        os.environ["KABU_API_PASSWORD"] = password
+        return run_app(cfg, open_browser=True)
+
+    if args.cmd == "run":
+        return run_app(cfg)
 
     if args.cmd in ("paper", "watch", "live"):
         from datetime import time as dtime

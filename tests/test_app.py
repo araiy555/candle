@@ -92,3 +92,33 @@ def test_web_mode_switch_endpoint(tmp_path, monkeypatch):
         assert post("/api/mode?m=nope")["ok"] is False
     finally:
         srv.shutdown()
+
+
+def test_launch_login_uses_saved_password_and_replaces_a_wrong_one(tmp_path, monkeypatch):
+    import getpass
+
+    from candle import __main__ as main, secretstore
+    from candle.kabu_client import KabuApiError, KabuClient
+
+    saved = {"pw": "old"}
+    monkeypatch.delenv("KABU_API_PASSWORD", raising=False)
+    monkeypatch.setattr(secretstore, "load", lambda: saved["pw"])
+    monkeypatch.setattr(secretstore, "save", lambda p: saved.update(pw=p) or True)
+    monkeypatch.setattr(secretstore, "delete", lambda: saved.update(pw="") or True)
+
+    def token(self):
+        if self._password != "good":
+            raise KabuApiError(401, "ログイン認証エラー")
+        return "tok"
+
+    monkeypatch.setattr(KabuClient, "token", token)
+    monkeypatch.setattr(getpass, "getpass", lambda prompt="": "good")
+    assert main.launch_login(Config(data_dir=tmp_path)) == "good"   # 古い保存分は捨てて入力し直す
+    assert saved["pw"] == "good"
+    monkeypatch.setattr(getpass, "getpass", lambda prompt="": (_ for _ in ()).throw(AssertionError))
+    assert main.launch_login(Config(data_dir=tmp_path)) == "good"   # 2回目は入力なし
+
+
+def test_secretstore_is_unavailable_off_windows():
+    from candle import secretstore
+    assert secretstore.load() == "" and secretstore.save("x") is False
