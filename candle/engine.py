@@ -34,6 +34,7 @@ class PaperEngine:
             daily_max_loss=risk.limits.daily_max_loss)
         self.settings.apply_to(risk.limits)
         self.close_all = False        # 管理画面の「全決済」
+        self.close_ids: set[int] = set()   # 管理画面で個別に「決済」を押した取引
         self.last_tick: datetime | None = None   # 最後に株価を受信した時刻（動作確認用）
         self.last_bar: datetime | None = None    # 最後に足が確定した時刻
         self.warnings: dict[str, str] = {}
@@ -130,6 +131,7 @@ class PaperEngine:
             if price is not None and reason:
                 self._close(t, now, price, reason)
         self.close_all = False
+        self.close_ids &= {t.id for t in self.open}
         self.snapshot = self.build_snapshot(now)
 
     # --- 売買 ---------------------------------------------------------------
@@ -152,7 +154,7 @@ class PaperEngine:
         """時刻・保有時間・手動操作による決済の理由。該当しなければ None。"""
         if late:
             return "時間決済"
-        if self.close_all:
+        if self.close_all or t.id in self.close_ids:
             return "手動決済"
         limit = self.settings.max_hold_min
         if limit > 0 and (now - t.entry_time).total_seconds() >= limit * 60:
@@ -221,7 +223,7 @@ class PaperEngine:
         for t in self.open:
             px = self.prices.get(t.symbol)
             positions.append(dict(
-                strategy=name(t.strategy_id), symbol=t.symbol, qty=t.qty,
+                id=t.id, strategy=name(t.strategy_id), symbol=t.symbol, qty=t.qty,
                 state=self.state_label(t), name=self.names.get(t.symbol),
                 signal_time=t.signal_time.isoformat(), entry_price=t.entry_price, price=px,
                 initial_stop=t.initial_stop, stop=t.stop,

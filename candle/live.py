@@ -105,6 +105,7 @@ class LiveEngine(PaperEngine):
                 log.warning("注文処理エラー %s: %s", self._label(t), e)
                 self._next[t.id] = now + RETRY
         self._reconcile(now)
+        self.close_ids &= {t.id for t in self.open}
         self.snapshot = self.build_snapshot(now)
 
     # --- 新規の買い -------------------------------------------------------------

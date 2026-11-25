@@ -433,3 +433,19 @@ def test_live_max_hold_time_cancels_stop_and_closes():
     br.fill(t.exit_order, 1008)
     e.on_clock(t0 + timedelta(minutes=11, seconds=5))
     assert e.open == [] and store.load_trades("live")[0].exit_reason == "保有時間切れ"
+
+
+def test_live_manual_close_of_one_position():
+    e, br, store, _ = make()
+    br.auto_fill["buy"] = 1007
+    t0 = signal(e)
+    e.on_price("7203", 1006, t0 + timedelta(seconds=1))
+    e.on_clock(t0 + timedelta(seconds=3))
+    (t,) = e.open
+    stop_id = t.stop_order
+    e.close_ids.add(t.id)
+    e.on_clock(t0 + timedelta(seconds=6))
+    assert t.state == "exiting" and br.orders[stop_id]["done"] and br.sent[-1][0] == "close"
+    br.fill(t.exit_order, 1009)
+    e.on_clock(t0 + timedelta(seconds=9))
+    assert e.open == [] and store.load_trades("live")[0].exit_reason == "手動決済"

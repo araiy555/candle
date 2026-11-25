@@ -89,7 +89,7 @@ function table(el,heads,rows,empty){
   $(el).innerHTML='<table><thead><tr>'+heads.map(h=>`<th>${h}</th>`).join('')+'</tr></thead><tbody>'+
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
-let halted=false,state=null,cur=null,formLoaded=false;
+let halted=false,state=null,cur=null,formLoaded=false;const closing=new Set();
 const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss','max_hold_min'];
 function example(){
   const E=1000,LOW=995,Q=100,f=v=>n(v,1),sm=$('stop_mode').value,sv=parseFloat($('stop_value').value)||0,tm=$('trail_mode').value,tv=parseFloat($('trail_value').value)||0;
@@ -123,9 +123,10 @@ async function load(){
   $('kpis').innerHTML=[['含み損益',yen(unreal)+' 円'],['本日の確定損益',yen(d.realized_today)+' 円'],
     ['投資額 / 上限',n(d.exposure)+' / '+n(d.limits.total_cap)+' 円'],['1日の最大損失',n(d.limits.daily_max_loss)+' 円'],
     ['保有数',d.positions.length]].map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('');
-  table('positions',['戦略','銘柄','状態','株数','サイン時刻','エントリー','現在値','初期損切り','現在の損切り','含み損益','R','保有時間'],
+  table('positions',['戦略','銘柄','状態','株数','サイン時刻','エントリー','現在値','初期損切り','現在の損切り','含み損益','R','保有時間',''],
     d.positions.map(p=>[esc(p.strategy),`<button class="link" data-sym="${esc(p.symbol)}">${esc(p.symbol)} ${esc(p.name||'')}</button>`,esc(p.state),n(p.qty),hm(p.signal_time),n(p.entry_price,1),n(p.price,1),n(p.initial_stop,1),
-      n(p.stop,1),yen(p.pnl),rr(p.r),n(p.hold_min)+'分']),'保有ポジションはありません');
+      n(p.stop,1),yen(p.pnl),rr(p.r),n(p.hold_min)+'分',closing.has(p.id)||p.state==='決済中'?'<span class="mut">決済中…</span>':`<button data-close="${p.id}" data-label="${esc(p.symbol)} ${esc(p.name||'')} ${n(p.qty)}株" style="padding:2px 12px">決済</button>`]),'保有ポジションはありません');
+  for(const id of [...closing])if(!d.positions.some(p=>p.id===id))closing.delete(id);
   table('stats',['戦略','取引数','勝率','PF','期待損益(円)','期待値(R)','合計損益(円)','平均保有'],
     d.stats.map(s=>[esc(s.strategy),s.trades,s.win_rate==null?'-':n(s.win_rate*100,1)+'%',s.pf==null?'-':n(s.pf,2),
       yen(s.expectancy),rr(s.expectancy_r),yen(s.total),s.avg_hold_min==null?'-':n(s.avg_hold_min)+'分']),'');
@@ -184,7 +185,9 @@ async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?
   if(!$('tip').style.display||$('tip').style.display==='none')draw(d)}
 function openChart(sym){cur=sym;$('l1').href=`https://finance.yahoo.co.jp/quote/${sym}.T/chart`;$('l2').href=`https://jp.tradingview.com/chart/?symbol=TSE%3A${sym}`;
   $('l3').href=`https://kabutan.jp/stock/chart?code=${sym}`;$('copy').textContent='銘柄コードをコピー';$('kmsg').textContent='';$('svg').innerHTML='';$('dt').textContent=sym;$('dlg').showModal();chart()}
-document.addEventListener('click',async e=>{const k=e.target.closest('[data-kabu]');if(k){const r=await kabu(k.dataset.kabu);if(r&&!r.ok)alert(r.message);return}
+document.addEventListener('click',async e=>{const c=e.target.closest('[data-close]');if(c){if(!confirm(c.dataset.label+' を成行で決済します。よろしいですか？'))return;
+  const id=Number(c.dataset.close);closing.add(id);await fetch('/api/close?id='+id,{method:'POST'});load();return}
+  const k=e.target.closest('[data-kabu]');if(k){const r=await kabu(k.dataset.kabu);if(r&&!r.ok)alert(r.message);return}
   const b=e.target.closest('[data-sym]');if(b)openChart(b.dataset.sym)});
 async function kabu(sym,msgEl){if(msgEl)msgEl.textContent='切り替え中…';try{const r=await (await fetch('/api/kabu-chart?symbol='+encodeURIComponent(sym),{method:'POST'})).json();
   if(msgEl)msgEl.textContent=r.ok?'':r.message;return r}catch(e){if(msgEl)msgEl.textContent='失敗しました'}}
@@ -287,6 +290,12 @@ def start_web(target, port: int = 8765, data_dir=None) -> ThreadingHTTPServer:
                     res = {"ok": False, "message": str(e)}
                 return self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"),
                                   "application/json")
+            if self.path.startswith("/api/close?id="):
+                value = self.path.split("=", 1)[1]
+                if not value.isdigit():
+                    return self._send(b"bad id", "text/plain", 400)
+                cur().close_ids.add(int(value))
+                return self._send(b"{}", "application/json")
             if self.path == "/api/close-all":
                 cur().close_all = True
                 return self._send(b"{}", "application/json")

@@ -292,3 +292,23 @@ def test_max_hold_time_closes_stagnant_position():
     assert len(e.open) == 1
     e.on_clock(t0 + timedelta(minutes=15))
     assert e.open == [] and store.load_trades("paper")[0].exit_reason == "保有時間切れ"
+
+
+def test_manual_close_of_one_position_from_dashboard():
+    e, store = engine()
+    t0 = feed_hammer(e, "T")
+    e.on_price("T", 1006, t0)
+    feed_hammer(e, "U")
+    e.on_price("U", 1006, t0)
+    a, b = e.open
+    srv = start_web(e, 0)
+    try:
+        url = f"http://127.0.0.1:{srv.server_address[1]}/api/close?id={a.id}"
+        urllib.request.urlopen(urllib.request.Request(url, method="POST"))
+    finally:
+        srv.shutdown()
+    e.on_clock(t0 + timedelta(seconds=5))
+    assert e.open == [b] and e.close_ids == set()                # 押した1件だけ決済
+    done = [t for t in store.load_trades("paper") if not t.is_open]
+    assert len(done) == 1 and done[0].exit_reason == "手動決済"
+    assert e.snapshot["positions"][0]["id"] == b.id
