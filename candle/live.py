@@ -71,6 +71,7 @@ class LiveEngine(PaperEngine):
     # --- 入力 -----------------------------------------------------------------
     def on_price(self, symbol: str, price: float, ts: datetime) -> None:
         self.prices[symbol] = price
+        self.last_tick = datetime.now(JST)
         if self.day != ts.date():
             self.day = ts.date()
             self.risk.new_day()

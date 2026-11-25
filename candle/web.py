@@ -53,6 +53,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <label class="pill" style="cursor:pointer"><input type="checkbox" id="auto" style="vertical-align:-2px"> サインが出たらkabuステーションのチャートを自動で切り替える</label>
 <span style="flex:1"></span><button id="closeall" hidden>全ポジションを決済</button><button id="btn"></button></header>
 <main>
+<section id="health" style="padding:8px 12px;font-size:13px"></section>
 <section id="warn" hidden><h2>確認が必要です</h2><ul id="warnlist" style="margin:0;padding-left:20px"></ul></section>
 <section data-trade><div class="kpis" id="kpis"></div></section>
 <section data-trade><h2>売買設定</h2><div class="form">
@@ -98,6 +99,9 @@ async function load(){
   $('mode').className='pill'+(d.live&&d.trading?' live':'');
   $('modes').hidden=!d.can_switch;$('mode').hidden=!!d.can_switch;
   document.querySelectorAll('#modes button').forEach(b=>{b.className=b.dataset.mode===d.mode_key?'on':'';b.disabled=!!d.switching});
+  const h=d.health;if(h){const stale=h.market_open&&(h.tick_age==null||h.tick_age>30);
+    $('health').innerHTML=(stale?'<b class="ng">株価を受信できていません</b>　':h.market_open?'<b class="ok">動作中</b>　':'<b class="mut">取引時間外</b>　')+
+      `最後の受信 ${h.last_tick?hm(h.last_tick):'なし'}　／　最後に確定した足 ${h.last_bar?hm(h.last_bar):'なし'}　／　本日の足 ${n(h.bars_today)}本　／　判定できる銘柄 ${h.ready} / ${h.watching}　／　本日のサイン ${h.signals_today}件`}
   $('warn').hidden=!(d.warnings&&d.warnings.length);$('warnlist').innerHTML=(d.warnings||[]).map(w=>`<li>${esc(w)}</li>`).join('');
   if(!formLoaded&&d.settings){for(const k of FIELDS)$(k).value=d.settings[k];formLoaded=true;syncForm()}
   $('mode').textContent=d.mode;$('time').textContent=md(d.time)+' 更新';

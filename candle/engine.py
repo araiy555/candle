@@ -9,7 +9,7 @@ import logging
 from collections import defaultdict, deque
 from datetime import datetime, time
 
-from .bars import JST, Bar
+from .bars import JST, SESSIONS, Bar
 from .patterns import STRATEGIES, STRATEGY_BY_ID, Params, contiguous_tail
 from .risk import RiskManager
 from .settings import TradeSettings
@@ -34,6 +34,8 @@ class PaperEngine:
             daily_max_loss=risk.limits.daily_max_loss)
         self.settings.apply_to(risk.limits)
         self.close_all = False        # 管理画面の「全決済」
+        self.last_tick: datetime | None = None   # 最後に株価を受信した時刻（動作確認用）
+        self.last_bar: datetime | None = None    # 最後に足が確定した時刻
         self.warnings: dict[str, str] = {}
         self.params = params or Params()
         self.slippage, self.exit_after = slippage, exit_after
@@ -75,6 +77,7 @@ class PaperEngine:
         if h and h[-1].start.date() != bar.start.date():
             h.clear()
         h.append(bar)
+        self.last_bar = bar.end
         if not bar.complete or bar.start.time() >= self.exit_after:
             return
         window = contiguous_tail(list(h)[-80:])
@@ -101,6 +104,7 @@ class PaperEngine:
 
     def on_price(self, symbol: str, price: float, ts: datetime) -> None:
         self.prices[symbol] = price
+        self.last_tick = datetime.now(JST)
         if self.day != ts.date():
             self.day = ts.date()
             self.risk.new_day()
@@ -161,6 +165,21 @@ class PaperEngine:
     def state_label(self, t: Trade) -> str:
         return "保有中"
 
+    def health(self, now: datetime) -> dict:
+        """動いているかを画面で確かめるための情報。"""
+        need = self.params.trend_bars + 2
+        ready = sum(1 for s in self.watchlist
+                    if len(contiguous_tail(list(self.history.get(s, ()))[-need:])) >= need)
+        today = now.date().isoformat()
+        return dict(
+            last_tick=self.last_tick.isoformat() if self.last_tick else None,
+            tick_age=(now - self.last_tick).total_seconds() if self.last_tick else None,
+            last_bar=self.last_bar.isoformat() if self.last_bar else None,
+            bars_today=sum(len(self.history.get(s, ())) for s in self.watchlist),
+            ready=ready, watching=len(self.watchlist),
+            signals_today=sum(1 for k in self.seen if k[2].startswith(today)),
+            market_open=any(a <= now.time() <= b for a, b in SESSIONS))
+
     def update_settings(self, data: dict) -> None:
         """管理画面からの設定変更。以後の新規の買いに適用する（保有中の分は変えない）。"""
         new = TradeSettings.from_dict({**vars(self.settings), **data})
@@ -209,7 +228,8 @@ class PaperEngine:
         return dict(
             time=now.isoformat(), mode=self.mode_label if self.trade_enabled else "通知のみ",
             live=self.mode == "live", trading=self.trade_enabled,
-            settings=vars(self.settings), warnings=list(self.warnings.values()), halted=self.risk.halted,
+            settings=vars(self.settings), warnings=list(self.warnings.values()),
+            health=self.health(now), halted=self.risk.halted,
             feed_ok=self.risk.feed_ok, auto_chart=self.auto_chart, realized_today=self.risk.realized_today,
             limits=vars(self.risk.limits),
             exposure=sum(t.entry_price * t.qty for t in self.open),
