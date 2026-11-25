@@ -270,8 +270,12 @@ def test_auto_chart_switch_only_when_enabled():
 def test_health_reports_whether_detection_is_running():
     e, _ = engine()
     e.watchlist = ["T", "U"]
-    t0 = feed_hammer(e)
+    assert e.health(T0)["ready"] == 0 and e.health(T0)["last_tick"] is None
+    bars = make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "T")
+    for b in bars:
+        e.on_bar(b)
+    t0 = bars[-1].end
     e.on_price("T", 1006, t0)
     h = e.health(t0)
-    assert h["ready"] == 1 and h["watching"] == 2 and h["bars_today"] == 7
+    assert h["ready"] == 1 and h["watching"] == 2 and h["bars_today"] == 8   # 判定には8本必要
     assert h["signals_today"] == 1 and h["market_open"] and h["last_tick"]
