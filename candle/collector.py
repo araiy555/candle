@@ -140,7 +140,7 @@ class _EngineSink:
 
     def set_feed(self, ok: bool) -> None:
         if self.engine:
-            self.engine.risk.feed_ok = ok
+            self.engine.set_feed(ok)
 
     def set_universe(self, symbols, names, minutes) -> None:
         if self.engine:

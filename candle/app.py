@@ -53,7 +53,7 @@ class App:
         self.engine.on_clock(now)
 
     def set_feed(self, ok: bool) -> None:
-        self.engine.risk.feed_ok = ok
+        self.engine.set_feed(ok)
 
     def set_universe(self, symbols: list[str], names: dict[str, str], minutes: int) -> None:
         self.engine.watchlist, self.engine.names = symbols, names
@@ -83,6 +83,14 @@ class App:
         self.want = mode
         return True, ""
 
+    def _fetch_tape(self, symbol: str) -> list[dict]:
+        """歩み値APIから当日の約定を取る（スクイーズ検知の記録用。秒間2件の制限あり）。"""
+        from .kabu_client import KabuClient
+        if getattr(self, "_tape_client", None) is None:
+            self._tape_client = KabuClient(self.cfg.rest_url, self.password, min_interval=0.6,
+                                           timeout=10.0)
+        return self._tape_client.time_and_sales(symbol)
+
     # --- エンジンの作り直し -----------------------------------------------------
     def _build(self, mode: str, old: PaperEngine | None) -> PaperEngine:
         cfg = self.cfg
@@ -91,7 +99,9 @@ class App:
         enabled = set(cfg.watch_strategies if mode == "watch" else cfg.trade_strategies) & ids
         common = dict(slippage=cfg.slippage, exit_after=dtime(h, m), enabled=enabled,
                       notify=self.notify, notify_ids=set(cfg.watch_strategies),
-                      settings=TradeSettings.load(cfg.data_dir / "settings.json"))
+                      settings=TradeSettings.load(cfg.data_dir / "settings.json"),
+                      squeeze_log=old.squeeze_log if old is not None else None,
+                      tape_fetcher=self._fetch_tape)
         risk = RiskManager(cfg.risk)
         if mode == "live":
             from .broker import KabuBroker

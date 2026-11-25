@@ -50,6 +50,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 </style></head><body>
 <header><h1>candle</h1><span class="pill" id="mode"></span><span class="seg" id="modes" hidden><button data-mode="watch">通知のみ</button><button data-mode="paper">テスト</button><button data-mode="live">本番</button></span><span class="pill" id="feed"></span>
 <span class="pill" id="halt"></span><span class="mut" id="time"></span>
+<a href="/squeeze" style="color:var(--acc);font-size:13px">スクイーズ検知履歴</a>
 <label class="pill" style="cursor:pointer"><input type="checkbox" id="auto" style="vertical-align:-2px"> サインが出たらkabuステーションのチャートを自動で切り替える</label>
 <span style="flex:1"></span><button id="closeall" hidden>全ポジションを決済</button><button id="btn"></button></header>
 <main>
@@ -210,7 +211,7 @@ load();setInterval(load,2000);setInterval(chart,5000);
 </script></body></html>"""
 
 
-def start_web(target, port: int = 8765, data_dir=None) -> ThreadingHTTPServer:
+def start_web(target, port: int = 8765, data_dir=None, db_path=None) -> ThreadingHTTPServer:
     """target はエンジン、またはモードを切り替えられる App。"""
     app = target if hasattr(target, "request_mode") else None
 
@@ -238,6 +239,27 @@ def start_web(target, port: int = 8765, data_dir=None) -> ThreadingHTTPServer:
                     return self._send(b"bad symbol", "text/plain", 400)
                 self._send(json.dumps(cur().chart_data(symbol), ensure_ascii=False).encode("utf-8"),
                            "application/json")
+            elif self.path.split("?")[0] == "/squeeze":
+                from . import squeeze_web
+                self._send(squeeze_web.PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path.startswith("/api/squeeze/list"):
+                from urllib.parse import parse_qs, urlparse
+
+                from . import squeeze_web
+                q = parse_qs(urlparse(self.path).query)
+                day = lambda k: (q.get(k) or [None])[0]
+                ok = lambda v: v is None or (len(v) == 10 and v.replace("-", "").isdigit())
+                if not (ok(day("from")) and ok(day("to"))):
+                    return self._send(b"bad date", "text/plain", 400)
+                res = squeeze_web.list_events(db_path, day("from"), day("to"))
+                self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"), "application/json")
+            elif self.path.startswith("/api/squeeze/event?id="):
+                from . import squeeze_web
+                value = self.path.split("=", 1)[1]
+                res = squeeze_web.get_event(db_path, int(value)) if value.isdigit() else None
+                if res is None:
+                    return self._send(b"not found", "text/plain", 404)
+                self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"), "application/json")
             elif self.path == "/kabu-inspect":
                 from .kabuwin import show_chart
                 _, text = show_chart("0000", inspect=True)

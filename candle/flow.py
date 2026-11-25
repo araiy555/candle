@@ -42,6 +42,9 @@ class FlowSignal:
     low: float                   # 期間の安値（損切りの基準に使える）
     reasons: list[str]
     note: str
+    # 以下は記録用。conditions は3条件それぞれの成否と、その根拠の数値。
+    conditions: list = field(default_factory=list)
+    metrics: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -98,6 +101,7 @@ class FlowDetector:
     def __init__(self, params: FlowParams | None = None):
         self.p = params or FlowParams()
         self._states: dict[str, _State] = {}
+        self.last_trade: tuple[float, int] = (0.0, 0)   # 直近の update で分かった（出来高, 向き）
 
     def update(self, symbol: str, msg: dict, now: datetime) -> FlowSignal | None:
         """配信1件を取り込み、条件がそろえばシグナルを返す。"""
@@ -108,6 +112,7 @@ class FlowDetector:
         if st.day != now.date():
             st.__init__()
             st.day = now.date()
+        self.last_trade = (0.0, 0)
         if price is None or cum is None:
             st.ask, st.ask_qty, st.bid = ask, ask_qty, bid
             return None
@@ -133,6 +138,7 @@ class FlowDetector:
         cutoff = now - timedelta(seconds=self.p.window)
         while st.events and st.events[0].t < cutoff:
             st.events.popleft()
+        self.last_trade = (vol, st.last_side if vol > 0 else 0)
         if vol <= 0:
             return None
         return self._judge(symbol, st, cum, now)
@@ -158,29 +164,52 @@ class FlowDetector:
         if low > 0 and (last.price - low) / low > p.max_rise:
             return None                   # すでに上がりすぎ
 
-        reasons = []
         asks = [e.ask_qty for e in ev if e.ask_qty]
         avg_ask = sum(asks) / len(asks) if asks else 0.0
         absorbed = buy / avg_ask if avg_ask > 0 else 0.0
         ask_held = first.ask is None or st.ask is None or st.ask >= first.ask
-        if absorbed >= p.absorb and ask_held:
-            reasons.append(f"売り板の吸収 {absorbed:.1f}倍")
-
         run = 0
         for e in reversed(ev):
             if e.side <= 0:
                 break
             run += 1
         ratio = buy / total if total > 0 else 0.0
-        if run >= p.run or ratio >= p.buy_ratio:
-            reasons.append(f"買い約定の連続 {run}回・買い比率 {ratio:.0%}")
-
+        sell_share = sell / total if total > 0 else 0.0
         bid_held = first.bid is None or st.bid is None or st.bid >= first.bid
-        if total > 0 and sell / total >= p.sell_share and bid_held:
-            reasons.append(f"売り圧力への耐性（売り {sell / total:.0%} でも下げず）")
 
+        def q(v):
+            return "不明" if v is None else f"{v:,.1f}円"
+
+        conditions = [
+            dict(key="absorb", label="売り板の吸収", ok=absorbed >= p.absorb and ask_held,
+                 short=f"売り板の吸収 {absorbed:.1f}倍",
+                 text=(f"{p.window:.0f}秒間の買い方向の約定 {buy:,.0f}株 ÷ 最良売り気配の平均数量 "
+                       f"{avg_ask:,.0f}株 ＝ {absorbed:.1f}倍（基準 {p.absorb:g}倍以上）。"
+                       f"最良売り気配は {q(first.ask)} → {q(st.ask)}"
+                       f"（{'下がっていない' if ask_held else '下がった'}）。"
+                       + ("" if asks else "売り気配の数量を受信できず、倍率は計算できていません。"))),
+            dict(key="run", label="買い約定の連続", ok=run >= p.run or ratio >= p.buy_ratio,
+                 short=f"買い約定の連続 {run}回・買い比率 {ratio:.0%}",
+                 text=(f"直近の買い方向の約定が {run}回連続（基準 {p.run}回以上）。"
+                       f"買い約定の比率 {ratio:.0%}（基準 {p.buy_ratio:.0%}以上）。"
+                       "どちらかを満たせば成立。")),
+            dict(key="resist", label="売り圧力への耐性",
+                 ok=total > 0 and sell_share >= p.sell_share and bid_held,
+                 short=f"売り圧力への耐性（売り {sell_share:.0%} でも下げず）",
+                 text=(f"売り方向の約定が全体の {sell_share:.0%}（{sell:,.0f}株、基準 {p.sell_share:.0%}以上）。"
+                       f"最良買い気配は {q(first.bid)} → {q(st.bid)}"
+                       f"（{'下がっていない' if bid_held else '下がった'}）。"
+                       f"株価は {first.price:,.1f}円 → {last.price:,.1f}円。")),
+        ]
+        reasons = [c["short"] for c in conditions if c["ok"]]
         if len(reasons) < 2:
             return None
         st.last_signal = now
         note = "、".join(reasons) + f"、出来高 通常の{surge:.1f}倍"
-        return FlowSignal(symbol, now, last.price, low, reasons, note)
+        metrics = dict(window=p.window, trades=len(ev), volume=total, buy_volume=buy,
+                       sell_volume=sell, expected_volume=expected, surge=surge,
+                       absorb_score=absorbed if asks else None, avg_ask_qty=avg_ask if asks else None,
+                       run=run, buy_ratio=ratio, sell_share=sell_share,
+                       ask_start=first.ask, ask_end=st.ask, bid_start=first.bid, bid_end=st.bid,
+                       price_start=first.price, low=low)
+        return FlowSignal(symbol, now, last.price, low, reasons, note, conditions, metrics)

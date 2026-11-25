@@ -71,6 +71,11 @@ class KabuClient:
                             params={"Type": str(type_), "ExchangeDivision": exchange_division})
         return res.get("Ranking") or []
 
+    def time_and_sales(self, symbol: str, exchange: int = 1) -> list[dict]:
+        """歩み値（約定の時刻・値段・数量）。売り買いの向きは含まれない。"""
+        res = self._request("GET", f"/timeandsales/{symbol}@{exchange}")
+        return (res or {}).get("TradingPrice") or []
+
     def symbol_info(self, symbol: str, exchange: int = 1) -> dict:
         return self._request("GET", f"/symbol/{symbol}@{exchange}")
 

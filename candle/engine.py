@@ -14,6 +14,7 @@ from .flow import FlowDetector, FlowParams
 from .patterns import FLOW_STRATEGY, STRATEGIES, STRATEGY_BY_ID, Params, contiguous_tail
 from .risk import RiskManager
 from .settings import TradeSettings
+from .squeeze_log import SqueezeLog
 from .store import Store
 from .trade import Trade, summarize
 
@@ -28,7 +29,8 @@ class PaperEngine:
                  slippage: float = 0.0005, exit_after: time = time(15, 20),
                  enabled: set[str] | None = None, trade_enabled: bool = True,
                  notify=None, notify_ids: set[str] | None = None,
-                 settings: TradeSettings | None = None, flow_params: FlowParams | None = None):
+                 settings: TradeSettings | None = None, flow_params: FlowParams | None = None,
+                 squeeze_log=None, tape_fetcher=None):
         self.store, self.risk = store, risk
         self.settings = settings or TradeSettings(
             per_trade_cap=risk.limits.per_symbol_cap, total_cap=risk.limits.total_cap,
@@ -46,6 +48,9 @@ class PaperEngine:
         want_flow = FLOW_STRATEGY in ids or (notify_ids is not None and FLOW_STRATEGY in notify_ids)
         self.flow = FlowDetector(flow_params) if want_flow else None
         self.flow_trades = FLOW_STRATEGY in ids      # スクイーズで売買もするか（通知だけなら False）
+        # 検知の記録と、その後の値動きの追跡（モードを切り替えても同じものを使い続ける）
+        self.squeeze_log = squeeze_log if squeeze_log is not None else (
+            SqueezeLog(store, tape_fetcher) if self.flow is not None else None)
         self.notes: dict[tuple[str, str, str], str] = {}
         self.history: dict[str, deque[Bar]] = defaultdict(lambda: deque(maxlen=400))  # 1分足でも当日分が収まる
         self.prices: dict[str, float] = {}
@@ -109,12 +114,20 @@ class PaperEngine:
             else:
                 self.store.add_signal(self.mode, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ")
 
+    def set_feed(self, ok: bool) -> None:
+        """API接続の状態が変わった。切断中は新規の買いを止め、追跡中の検知は欠損として扱う。"""
+        self.risk.feed_ok = ok
+        if not ok and self.squeeze_log is not None:
+            self.squeeze_log.on_gap("株価の受信が途切れたため、以降は記録できていません", datetime.now(JST))
+
     def on_board(self, symbol: str, msg: dict, now: datetime) -> None:
         """配信1件ごとに呼ばれる。板と約定の流れからスクイーズを判定する。"""
-        if self.flow is None or now.astimezone(JST).time() >= self.exit_after:
+        if self.flow is None:
             return
         sig = self.flow.update(symbol, msg, now)
-        if sig is None:
+        if self.squeeze_log is not None:
+            self.squeeze_log.on_tick(symbol, msg, now, *self.flow.last_trade)
+        if sig is None or now.astimezone(JST).time() >= self.exit_after:
             return
         name = STRATEGY_BY_ID[FLOW_STRATEGY].name
         key = (FLOW_STRATEGY, symbol, sig.time.isoformat())
@@ -122,6 +135,8 @@ class PaperEngine:
             return
         self.seen.add(key)
         log.info("サイン %s %s %s", name, symbol, sig.note)
+        if self.squeeze_log is not None:
+            self.squeeze_log.on_signal(sig, msg, self.names.get(symbol))
         if self.notify and (self.notify_ids is None or FLOW_STRATEGY in self.notify_ids):
             label = f"{symbol} {self.names.get(symbol) or ''}".strip()
             self.notify(f"{name}  {label}", f"{sig.time:%H:%M:%S} {sig.price:,.1f}円　{sig.note}", symbol)
@@ -167,6 +182,8 @@ class PaperEngine:
                 self._close(t, now, price, reason)
         self.close_all = False
         self.close_ids &= {t.id for t in self.open}
+        if self.squeeze_log is not None:
+            self.squeeze_log.on_clock(now)
         self.snapshot = self.build_snapshot(now)
 
     # --- 売買 ---------------------------------------------------------------

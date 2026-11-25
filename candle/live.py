@@ -106,6 +106,8 @@ class LiveEngine(PaperEngine):
                 self._next[t.id] = now + RETRY
         self._reconcile(now)
         self.close_ids &= {t.id for t in self.open}
+        if self.squeeze_log is not None:
+            self.squeeze_log.on_clock(now)
         self.snapshot = self.build_snapshot(now)
 
     # --- 新規の買い -------------------------------------------------------------

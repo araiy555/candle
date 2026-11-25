@@ -71,7 +71,7 @@ def run_app(cfg, open_browser: bool = False) -> int:
     if not app.password:
         print("APIパスワードがありません。start.bat から起動してください。")
         return 1
-    start_web(app, cfg.web_port, cfg.data_dir)
+    start_web(app, cfg.web_port, cfg.data_dir, cfg.db_path)
     url = f"http://localhost:{cfg.web_port}"
     print(f"管理画面: {url}")
     print("モードの切り替えと設定は管理画面で行います。起動直後は「通知のみ」です。")
@@ -306,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
             flag = cfg.data_dir / "auto_chart.txt"
             engine.on_auto_chart = show_chart_async
             engine.auto_chart = flag.exists() and flag.read_text().strip() == "1"
-            start_web(engine, cfg.web_port, cfg.data_dir)
+            start_web(engine, cfg.web_port, cfg.data_dir, cfg.db_path)
             print(f"モード: {engine.mode_label if engine.trade_enabled else '通知のみ'}")
             print(f"管理画面: http://localhost:{cfg.web_port}")
             return engine
