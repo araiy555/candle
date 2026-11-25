@@ -417,3 +417,19 @@ def test_sell_falls_back_when_position_id_is_rejected():
     c = C()
     assert KabuBroker(c).close_market("7203", 100, [("E1", 100)]) == "OK1"
     assert len(c.bodies) == 2 and c.bodies[1]["ClosePositionOrder"] == 0
+
+
+def test_live_max_hold_time_cancels_stop_and_closes():
+    e, br, store, _ = make(settings=TradeSettings(max_hold_min=10))
+    br.auto_fill["buy"] = 1007
+    t0 = signal(e)
+    e.on_price("7203", 1006, t0 + timedelta(seconds=1))
+    e.on_clock(t0 + timedelta(seconds=3))
+    (t,) = e.open
+    e.on_clock(t0 + timedelta(minutes=9))
+    assert t.state == "open"
+    e.on_clock(t0 + timedelta(minutes=11))
+    assert t.state == "exiting" and br.sent[-1][0] == "close"
+    br.fill(t.exit_order, 1008)
+    e.on_clock(t0 + timedelta(minutes=11, seconds=5))
+    assert e.open == [] and store.load_trades("live")[0].exit_reason == "保有時間切れ"

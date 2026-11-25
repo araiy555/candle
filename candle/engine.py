@@ -126,8 +126,9 @@ class PaperEngine:
         for t in list(self.open):
             price = self.prices.get(t.symbol)
             stale = t.entry_time.astimezone(JST).date() < now.date()  # 停止中に持ち越した分
-            if price is not None and (late or stale or self.close_all):
-                self._close(t, now, price, "手動決済" if self.close_all and not late else "時間決済")
+            reason = self.exit_reason_by_time(t, now, late or stale)
+            if price is not None and reason:
+                self._close(t, now, price, reason)
         self.close_all = False
         self.snapshot = self.build_snapshot(now)
 
@@ -146,6 +147,17 @@ class PaperEngine:
         self.store.save_trade(t)
         self.open.append(t)
         log.info("仮想買い %s %s %d株 @%.1f 損切り%.1f", strategy_id, symbol, qty, entry, stop)
+
+    def exit_reason_by_time(self, t: Trade, now: datetime, late: bool) -> str | None:
+        """時刻・保有時間・手動操作による決済の理由。該当しなければ None。"""
+        if late:
+            return "時間決済"
+        if self.close_all:
+            return "手動決済"
+        limit = self.settings.max_hold_min
+        if limit > 0 and (now - t.entry_time).total_seconds() >= limit * 60:
+            return "保有時間切れ"
+        return None
 
     def _check(self, strategy_id, symbol, entry, stop, ts) -> tuple[int, str]:
         """新規買いの可否と数量。"""

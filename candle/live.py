@@ -89,8 +89,9 @@ class LiveEngine(PaperEngine):
             self.pending.clear()
         for t in list(self.open):
             stale = t.entry_time.astimezone(JST).date() < now.date()
-            if t.state in ("open", "replacing") and (late or stale or self.close_all):
-                self._begin_exit(t, now, "手動決済" if self.close_all and not late else "時間決済")
+            reason = self.exit_reason_by_time(t, now, late or stale)
+            if t.state in ("open", "replacing") and reason:
+                self._begin_exit(t, now, reason)
         self.close_all = False
         for t in list(self.open):
             if now < self._next.get(t.id, now):

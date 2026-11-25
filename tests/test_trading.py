@@ -279,3 +279,16 @@ def test_health_reports_whether_detection_is_running():
     h = e.health(t0)
     assert h["ready"] == 1 and h["watching"] == 2 and h["bars_today"] == 8   # 判定には8本必要
     assert h["signals_today"] >= 1 and h["market_open"] and h["last_tick"]   # 複数の戦略が同じ足で成立しうる
+
+
+def test_max_hold_time_closes_stagnant_position():
+    e, store = engine()
+    t0 = feed_hammer(e)
+    e.on_price("T", 1006, t0)
+    e.on_clock(t0 + timedelta(minutes=50))
+    assert len(e.open) == 1                                      # 既定（0）では時間で決済しない
+    e.update_settings({"max_hold_min": 15})
+    e.on_clock(t0 + timedelta(minutes=14))
+    assert len(e.open) == 1
+    e.on_clock(t0 + timedelta(minutes=15))
+    assert e.open == [] and store.load_trades("paper")[0].exit_reason == "保有時間切れ"
