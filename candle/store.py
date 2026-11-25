@@ -112,6 +112,19 @@ class Store:
             (row[0],)).fetchall()
         return row[0], [dict(rank=r[0], symbol=r[1], name=r[2], turnover=r[3]) for r in rows]
 
+    def known_names(self) -> dict[str, str]:
+        """これまでに監視した銘柄の名前（新しい日付のものを優先）。"""
+        rows = self.conn.execute(
+            "SELECT symbol, name FROM watchlist WHERE name IS NOT NULL ORDER BY day").fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def open_symbols(self) -> list[str]:
+        """保有中（テスト・本番とも）の銘柄。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT symbol FROM trades WHERE exit_time IS NULL "
+            "AND mode IN ('paper','live') ORDER BY symbol").fetchall()
+        return [r[0] for r in rows]
+
     def symbols_with_bars(self, minutes: int = 5) -> list[str]:
         return [r[0] for r in self.conn.execute(
             "SELECT DISTINCT symbol FROM bars WHERE minutes=? ORDER BY symbol", (minutes,))]

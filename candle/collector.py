@@ -192,7 +192,7 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
                         sink.login_failed()
                     raise
                 # SQLiteは作成したスレッドでのみ使えるため、ここは同期で呼ぶ（起動時のみ・短時間）
-                symbols = select_universe(cfg, client, store)
+                symbols = select_universe(cfg, client, store, must=store.open_symbols())
                 await asyncio.to_thread(client.unregister_all)
                 await asyncio.to_thread(client.register, symbols)
                 log.info("監視銘柄 %d 件を登録しました: %s", len(symbols), " ".join(symbols))
@@ -200,9 +200,7 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
                                               max_size=None) as ws:
                     log.info("PUSH配信に接続しました (%s)", cfg.ws_url)
                     backoff = 1.0
-                    wl = store.latest_watchlist()
-                    sink.set_universe(symbols, {r["symbol"]: r["name"] for r in wl[1]} if wl else {},
-                                      cfg.bar_minutes)
+                    sink.set_universe(symbols, store.known_names(), cfg.bar_minutes)
                     feed(True)
                     while not stop.is_set():
                         try:

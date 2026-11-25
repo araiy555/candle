@@ -128,7 +128,11 @@ class PaperEngine:
             price = self.prices.get(t.symbol)
             stale = t.entry_time.astimezone(JST).date() < now.date()  # 停止中に持ち越した分
             reason = self.exit_reason_by_time(t, now, late or stale)
-            if price is not None and reason:
+            if reason and price is None:
+                self.warnings[f"price{t.id}"] = (f"{t.symbol}: 株価をまだ受信できていないため、"
+                                                 "決済を保留しています。受信でき次第、決済します。")
+            elif reason:
+                self.warnings.pop(f"price{t.id}", None)
                 self._close(t, now, price, reason)
         self.close_all = False
         self.close_ids &= {t.id for t in self.open}

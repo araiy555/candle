@@ -136,3 +136,37 @@ def test_collector_end_to_end_with_mock_server(tmp_path, monkeypatch):
         (3010, 3050, 3010, 3050, 1700, True), (3040, 3040, 3040, 3040, 300, True)]
     assert store.latest_watchlist()[1][1]["symbol"] == "6758"
     assert (tmp_path / "raw").exists()
+
+
+def test_universe_always_includes_held_symbols(tmp_path):
+    from candle.universe import select_universe
+
+    class Client:
+        def ranking(self, type_, division):
+            return [{"Symbol": str(7000 + i), "SymbolName": f"N{i}", "Turnover": 1.0}
+                    for i in range(60)]
+
+    store = Store(":memory:")
+    cfg = Config(universe_size=50, data_dir=tmp_path)
+    got = select_universe(cfg, Client(), store, must=["9434", "7003"])
+    assert got[:2] == ["9434", "7003"] and len(got) == 50 and len(set(got)) == 50
+    assert "7049" not in got and "7048" in got                   # 圏外の保有銘柄の分だけ末尾を削る
+    assert select_universe(cfg, Client(), store)[0] == "7000"
+
+
+def test_open_symbols_and_known_names():
+    from datetime import datetime
+    from candle.bars import JST
+    from candle.trade import Trade
+
+    store = Store(":memory:")
+    now = datetime(2026, 11, 25, 9, 35, tzinfo=JST)
+    store.save_trade(Trade("paper", "tweezer_bottom", "9434", now, now, 238.8, 1500, 237.6, 237.6))
+    done = Trade("paper", "tweezer_bottom", "7203", now, now, 100, 100, 99, 99)
+    done.close(now, 101, "x")
+    store.save_trade(done)
+    store.save_trade(Trade("backtest", "hammer", "1111", now, now, 100, 100, 99, 99))
+    assert store.open_symbols() == ["9434"]
+    store.save_watchlist("2026-11-24", [dict(rank=1, symbol="9434", name="ＳＢ", turnover=1)])
+    store.save_watchlist("2026-11-25", [dict(rank=1, symbol="7203", name="トヨタ", turnover=1)])
+    assert store.known_names() == {"9434": "ＳＢ", "7203": "トヨタ"}

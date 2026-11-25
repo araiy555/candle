@@ -12,10 +12,22 @@ from .store import Store
 log = logging.getLogger(__name__)
 
 
-def select_universe(cfg: Config, client: KabuClient, store: Store) -> list[str]:
+def select_universe(cfg: Config, client: KabuClient, store: Store,
+                    must: list[str] | None = None) -> list[str]:
     """売買代金上位から監視銘柄を決める。
 
-    優先順: 設定の固定リスト → 当日のランキング → 前回保存した監視銘柄。
+    must（保有中の銘柄）は、順位が下がっていても必ず監視に含める。
+    株価が届かなくなると、損切りも決済もできなくなるため。
+    """
+    must = list(dict.fromkeys(must or []))
+    picked = _pick(cfg, client, store)
+    rest = [s for s in picked if s not in must]
+    return (must + rest)[: max(cfg.universe_size, len(must))]
+
+
+def _pick(cfg: Config, client: KabuClient, store: Store) -> list[str]:
+    """優先順: 設定の固定リスト → 当日のランキング → 前回保存した監視銘柄。
+
     ランキングは寄り付き前（7:53頃〜9:00過ぎ）は空になるため、前回分で代用する。
     """
     if cfg.symbols:
