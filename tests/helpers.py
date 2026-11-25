@@ -4,13 +4,13 @@ from candle.bars import JST, Bar
 from candle.patterns import expected_next
 
 
-def make_bars(ohlc, symbol="T", start=(9, 0), day=24):
-    """(始値, 高値, 安値, 終値) の並びから連続した5分足を作る。"""
+def make_bars(ohlc, symbol="T", start=(9, 20), day=24, minutes=5):
+    """(始値, 高値, 安値, 終値) の並びから連続した足を作る。"""
     ts = datetime(2026, 11, day, *start, tzinfo=JST)
     out = []
     for o, h, l, c in ohlc:
-        out.append(Bar(symbol, ts, 5, o, h, l, c, 1000, 5, True))
-        ts = expected_next(ts, 5) or ts + timedelta(minutes=5)
+        out.append(Bar(symbol, ts, minutes, o, h, l, c, 1000, 5, True))
+        ts = expected_next(ts, minutes) or ts + timedelta(minutes=minutes)
     return out
 
 

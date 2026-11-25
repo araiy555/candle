@@ -90,7 +90,7 @@ class PaperEngine:
             h.clear()
         h.append(bar)
         self.last_bar = bar.end
-        if not bar.complete or bar.start.time() >= self.exit_after:
+        if not bar.complete or bar.start.time() >= self.exit_after or self.in_quiet_open(bar.end):
             return
         window = contiguous_tail(list(h)[-80:])
         for s in self.strategies:
@@ -114,6 +114,12 @@ class PaperEngine:
             else:
                 self.store.add_signal(self.mode, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ")
 
+    def in_quiet_open(self, ts: datetime) -> bool:
+        """寄り付き直後の、サインを出さない時間帯か。値動きが荒く、サインが出すぎるため。"""
+        ts = ts.astimezone(JST)
+        minutes = (ts.hour - 9) * 60 + ts.minute + ts.second / 60
+        return 0 <= minutes < self.settings.quiet_open_min
+
     def set_feed(self, ok: bool) -> None:
         """API接続の状態が変わった。切断中は新規の買いを止め、追跡中の検知は欠損として扱う。"""
         self.risk.feed_ok = ok
@@ -127,7 +133,7 @@ class PaperEngine:
         sig = self.flow.update(symbol, msg, now)
         if self.squeeze_log is not None:
             self.squeeze_log.on_tick(symbol, msg, now, *self.flow.last_trade)
-        if sig is None or now.astimezone(JST).time() >= self.exit_after:
+        if sig is None or now.astimezone(JST).time() >= self.exit_after or self.in_quiet_open(now):
             return
         name = STRATEGY_BY_ID[FLOW_STRATEGY].name
         key = (FLOW_STRATEGY, symbol, sig.time.isoformat())

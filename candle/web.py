@@ -57,15 +57,16 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <section id="health" style="padding:8px 12px;font-size:13px"></section>
 <section id="warn" hidden><h2>確認が必要です</h2><ul id="warnlist" style="margin:0;padding-left:20px"></ul></section>
 <section data-trade><div class="kpis" id="kpis"></div></section>
-<section data-trade><h2>売買設定</h2><div class="form">
+<section><h2>設定</h2><div class="form">
 <div><label for="stop_mode">損切りライン</label><div class="row"><select id="stop_mode"><option value="pattern_low">パターンの安値</option><option value="percent">買値から一定率（%）下</option><option value="yen">買値から一定額（円）下</option></select><input id="stop_value" type="number" step="0.1" min="0"></div></div>
 <div><label for="trail_mode">トレーリングストップ</label><div class="row"><select id="trail_mode"><option value="r_step">リスク幅（R）ごとに引き上げ</option><option value="percent">高値から一定率（%）下に追従</option><option value="yen">高値から一定額（円）下に追従</option><option value="none">トレーリングなし</option></select><input id="trail_value" type="number" step="0.1" min="0"></div></div>
 <div><label for="per_trade_cap">1回の買いの上限（円）</label><div class="row"><input id="per_trade_cap" type="number" step="10000" min="0" style="width:100%"></div></div>
 <div><label for="total_cap">同時に持つ合計の上限（円）</label><div class="row"><input id="total_cap" type="number" step="10000" min="0" style="width:100%"></div></div>
 <div><label for="daily_max_loss">1日の最大損失（円）</label><div class="row"><input id="daily_max_loss" type="number" step="1000" min="0" style="width:100%"></div></div>
+<div><label for="quiet_open_min">寄り付き後に待つ時間（分）　この間は通知も売買もしない</label><div class="row"><input id="quiet_open_min" type="number" step="1" min="0" style="width:100%"></div></div>
 <div><label for="max_hold_min">最大保有時間（分）　0＝時間では決済しない</label><div class="row"><input id="max_hold_min" type="number" step="1" min="0" style="width:100%"></div></div>
 <div><div class="row" style="align-items:center"><button id="save">設定を保存</button><span class="mut" id="savemsg" style="font-size:12px"></span></div></div>
-</div><div id="example" style="margin-top:12px;font-size:13px"></div><div class="note" style="padding:10px 0 0">変更は次の買いから適用します。保有中のポジションの損切り・トレーリングは、買った時点の設定のままです。</div></section>
+</div><div id="example" style="margin-top:12px;font-size:13px"></div><div class="note" style="padding:10px 0 0">損切り・トレーリング・金額の上限は、テストと本番の売買に使います（次の買いから適用。保有中の分は買った時点の設定のまま）。寄り付き後に待つ時間は、通知のみのモードでも効きます。</div></section>
 <section data-trade><h2>保有ポジション</h2><div id="positions"></div></section>
 <section data-trade><h2>戦略別成績</h2><div id="stats"></div></section>
 <section><h2>検出されたサイン</h2><div id="signals"></div></section>
@@ -91,7 +92,7 @@ function table(el,heads,rows,empty){
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
 let halted=false,state=null,cur=null,formLoaded=false;const closing=new Set();
-const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss','max_hold_min'];
+const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min'];
 function nextRaise(p){if(p.next_raise)return `${n(p.next_raise[0],1)} で ${n(p.next_raise[1],1)} へ`;
   if(p.trail_mode==='percent')return `<span class="mut">高値の${n(p.trail_value,2)}%下</span>`;if(p.trail_mode==='yen')return `<span class="mut">高値の${n(p.trail_value,1)}円下</span>`;return '<span class="mut">なし</span>'}
 function example(){

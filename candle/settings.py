@@ -20,6 +20,7 @@ class TradeSettings:
     total_cap: float = 1_000_000     # 同時に持つ合計の上限（円）
     daily_max_loss: float = 10_000   # 1日の最大損失（円）
     max_hold_min: float = 0          # 最大保有時間（分）。0なら時間では決済しない
+    quiet_open_min: float = 15       # 寄り付き（9:00）からこの分数は、通知も売買もしない
 
     def validate(self) -> None:
         if self.stop_mode not in STOP_MODES:
@@ -34,6 +35,8 @@ class TradeSettings:
             raise ValueError("トレーリングの数値は0より大きくしてください")
         if self.trail_mode == "percent" and self.trail_value >= 20:
             raise ValueError("トレーリングの率は20%未満にしてください")
+        if not 0 <= self.quiet_open_min <= 120:
+            raise ValueError("寄り付き後に待つ時間は0〜120分にしてください")
         if self.max_hold_min < 0:
             raise ValueError("最大保有時間は0以上にしてください")
         if min(self.per_trade_cap, self.total_cap, self.daily_max_loss) <= 0:

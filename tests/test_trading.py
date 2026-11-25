@@ -65,7 +65,7 @@ def test_risk_limits():
 
 
 def bt(after, **kw):
-    return run_symbol(make_bars(HAMMER + after), STRATEGY_BY_ID["hammer"], Params(),
+    return run_symbol(make_bars(HAMMER + after, start=(9, 0)), STRATEGY_BY_ID["hammer"], Params(),
                       RiskLimits(), slippage=0.0, **kw)
 
 
@@ -200,7 +200,7 @@ def test_watch_mode_notifies_only_selected_strategy_without_trading():
     bars = make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "7203")
     for b in bars:
         e.on_bar(b)
-    assert sent == [("毛抜き底  7203 トヨタ", "09:40 終値 1,006.0 / パターン安値 995.0", "7203")]
+    assert sent == [("毛抜き底  7203 トヨタ", "10:00 終値 1,006.0 / パターン安値 995.0", "7203")]
     e.on_price("7203", 1007, bars[-1].end)
     assert e.open == [] and store.load_trades("paper") == []     # 売買はしない
     assert store.recent_signals("paper")[0]["action"] == "通知のみ"
@@ -326,3 +326,23 @@ def test_next_raise_shows_when_the_stop_will_move():
     assert round(lvl, 1) == 601.9 and round(new, 1) == 598.9     # 次は+2Rで+1Rへ
     assert Trade("paper", "x", "A", T0, T0, 100, 100, 99, 99, trail_mode="percent",
                  trail_value=0.5).next_raise() is None
+
+
+def test_no_signals_during_quiet_period_after_the_open():
+    store = Store(":memory:")
+    sent = []
+    e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"},
+                    trade_enabled=False, notify=lambda *a: sent.append(a))
+    assert e.settings.quiet_open_min == 15
+    shape = DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)]
+    for b in make_bars(shape, "A", start=(9, 0), minutes=1):      # 9:08 に成立 → 通知しない
+        e.on_bar(b)
+    assert sent == [] and store.recent_signals("paper") == []
+    for b in make_bars(shape, "B", start=(9, 8), minutes=1):      # 9:16 に成立 → 通知する
+        e.on_bar(b)
+    assert len(sent) == 1
+    e.update_settings({"quiet_open_min": 0})
+    for b in make_bars(shape, "C", start=(9, 0), minutes=1):
+        e.on_bar(b)
+    assert len(sent) == 2
+    assert not e.in_quiet_open(T0.replace(hour=12, minute=31))    # 後場の寄り付きは対象外
