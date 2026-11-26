@@ -128,7 +128,8 @@ class LiveEngine(PaperEngine):
                                           f"kabuステーションで注文と建玉を確認してください。（{e}）")
                 self._tell("買い注文エラー・新規停止", f"{symbol}: {e}", symbol)
         self.store.add_signal(self.mode, strategy_id, symbol, sig_time, price, low, why,
-                              self.notes.pop((strategy_id, symbol, sig_time.isoformat()), ""))
+                              self.notes.pop((strategy_id, symbol, sig_time.isoformat()), ""),
+                              self.vwap(symbol))
         if qty <= 0:
             log.info("見送り %s %s: %s", strategy_id, symbol, why)
             return

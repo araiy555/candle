@@ -19,6 +19,9 @@ from .store import Store
 from .trade import Trade, summarize
 
 log = logging.getLogger(__name__)
+# 画面に表示する銘柄情報（すべて配信で受信した値。判定には使わない）
+QUOTE_FIELDS = ("CurrentPrice", "PreviousClose", "ChangePreviousClose", "ChangePreviousClosePer",
+                "VWAP", "OpeningPrice", "HighPrice", "LowPrice", "TradingVolume", "TradingValue")
 
 
 class PaperEngine:
@@ -52,6 +55,7 @@ class PaperEngine:
         self.squeeze_log = squeeze_log if squeeze_log is not None else (
             SqueezeLog(store, tape_fetcher) if self.flow is not None else None)
         self.notes: dict[tuple[str, str, str], str] = {}
+        self.quotes: dict[str, dict] = {}    # 銘柄ごとの最新の受信値（VWAP・前日比・高安など。表示用）
         self.history: dict[str, deque[Bar]] = defaultdict(lambda: deque(maxlen=400))  # 1分足でも当日分が収まる
         self.prices: dict[str, float] = {}
         self.watchlist: list[str] = []
@@ -112,13 +116,18 @@ class PaperEngine:
             if self.trade_enabled:
                 self.pending[bar.symbol].append((s.id, bar.end, low))
             else:
-                self.store.add_signal(self.mode, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ")
+                self.store.add_signal(self.mode, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ",
+                                      vwap=self.vwap(bar.symbol))
 
     def in_quiet_open(self, ts: datetime) -> bool:
         """寄り付き直後の、サインを出さない時間帯か。値動きが荒く、サインが出すぎるため。"""
         ts = ts.astimezone(JST)
         minutes = (ts.hour - 9) * 60 + ts.minute + ts.second / 60
         return 0 <= minutes < self.settings.quiet_open_min
+
+    def vwap(self, symbol: str) -> float | None:
+        v = (self.quotes.get(symbol) or {}).get("VWAP")
+        return float(v) if v else None
 
     def set_feed(self, ok: bool) -> None:
         """API接続の状態が変わった。切断中は新規の買いを止め、追跡中の検知は欠損として扱う。"""
@@ -128,6 +137,7 @@ class PaperEngine:
 
     def on_board(self, symbol: str, msg: dict, now: datetime) -> None:
         """配信1件ごとに呼ばれる。板と約定の流れからスクイーズを判定する。"""
+        self.quotes[symbol] = {k: msg.get(k) for k in QUOTE_FIELDS}
         if self.flow is None:
             return
         sig = self.flow.update(symbol, msg, now)
@@ -153,7 +163,7 @@ class PaperEngine:
             self.pending[symbol].append((FLOW_STRATEGY, sig.time, sig.low))
         else:
             self.store.add_signal(self.mode, FLOW_STRATEGY, symbol, sig.time, sig.price, sig.low,
-                                  "通知のみ", sig.note)
+                                  "通知のみ", sig.note, self.vwap(symbol))
 
     def on_price(self, symbol: str, price: float, ts: datetime) -> None:
         self.prices[symbol] = price
@@ -199,7 +209,8 @@ class PaperEngine:
         stop = st.initial_stop(entry, low)
         qty, why = self._check(strategy_id, symbol, entry, stop, ts)
         self.store.add_signal(self.mode, strategy_id, symbol, sig_time, price, low, why,
-                              self.notes.pop((strategy_id, symbol, sig_time.isoformat()), ""))
+                              self.notes.pop((strategy_id, symbol, sig_time.isoformat()), ""),
+                              self.vwap(symbol))
         if qty <= 0:
             log.info("見送り %s %s: %s", strategy_id, symbol, why)
             return
@@ -269,8 +280,9 @@ class PaperEngine:
                 bars = []
         return dict(symbol=symbol, name=self.names.get(symbol),
                     minutes=bars[0].minutes if bars else None,
+                    quote=self.quotes.get(symbol),
                     bars=[dict(t=b.start.isoformat(), o=b.open, h=b.high, l=b.low, c=b.close,
-                               v=b.volume, ok=b.complete) for b in bars])
+                               v=b.volume, ok=b.complete, vwap=b.vwap) for b in bars])
 
     def build_snapshot(self, now: datetime) -> dict:
         trades = self.store.load_trades(self.mode)
@@ -285,7 +297,7 @@ class PaperEngine:
                 id=t.id, strategy=name(t.strategy_id), symbol=t.symbol, qty=t.qty,
                 state=self.state_label(t), name=self.names.get(t.symbol),
                 signal_time=t.signal_time.isoformat(), entry_price=t.entry_price, price=px,
-                initial_stop=t.initial_stop, stop=t.stop,
+                initial_stop=t.initial_stop, stop=t.stop, vwap=self.vwap(t.symbol),
                 next_raise=t.next_raise(), trail_mode=t.trail_mode, trail_value=t.trail_value,
                 pnl=None if px is None else t.pnl(px),
                 r=None if px is None else t.r_multiple(px),
@@ -307,7 +319,9 @@ class PaperEngine:
             feed_ok=self.risk.feed_ok, auto_chart=self.auto_chart, realized_today=self.risk.realized_today,
             limits=vars(self.risk.limits),
             exposure=sum(t.entry_price * t.qty for t in self.open),
-            watchlist=[dict(symbol=s, name=self.names.get(s), price=self.prices.get(s))
+            watchlist=[dict(symbol=s, name=self.names.get(s), price=self.prices.get(s),
+                            vwap=self.vwap(s),
+                            change_pct=(self.quotes.get(s) or {}).get("ChangePreviousClosePer"))
                        for s in self.watchlist],
             positions=positions, signals=signals, history=history,
             stats=[dict(strategy=s.name, **summarize(by_strategy.get(s.id, [])))

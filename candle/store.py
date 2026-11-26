@@ -66,6 +66,10 @@ class Store:
                           ("holds", "TEXT NOT NULL DEFAULT ''")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
+        if "vwap" not in {r[1] for r in self.conn.execute("PRAGMA table_info(bars)")}:
+            self.conn.execute("ALTER TABLE bars ADD COLUMN vwap REAL")
+        if "vwap" not in {r[1] for r in self.conn.execute("PRAGMA table_info(signals)")}:
+            self.conn.execute("ALTER TABLE signals ADD COLUMN vwap REAL")
         if "note" not in {r[1] for r in self.conn.execute("PRAGMA table_info(signals)")}:
             self.conn.execute("ALTER TABLE signals ADD COLUMN note TEXT NOT NULL DEFAULT ''")
         self.conn.commit()
@@ -76,15 +80,17 @@ class Store:
         if not bars:
             return
         self.conn.executemany(
-            f"INSERT OR {'REPLACE' if replace else 'IGNORE'} INTO bars VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            f"INSERT OR {'REPLACE' if replace else 'IGNORE'} INTO bars "
+            "(symbol,minutes,start,open,high,low,close,volume,ticks,complete,source,vwap) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             [(b.symbol, b.minutes, b.start.isoformat(), b.open, b.high, b.low, b.close,
-              b.volume, b.ticks, int(b.complete), source) for b in bars],
+              b.volume, b.ticks, int(b.complete), source, b.vwap) for b in bars],
         )
         self.conn.commit()
 
     def load_bars(self, symbol: str, minutes: int = 5, limit: int | None = None,
                   source: str | None = None) -> list[Bar]:
-        sql = ("SELECT symbol, minutes, start, open, high, low, close, volume, ticks, complete "
+        sql = ("SELECT symbol, minutes, start, open, high, low, close, volume, ticks, complete, vwap "
                "FROM bars WHERE symbol=? AND minutes=?")
         args: list = [symbol, minutes]
         if source:
@@ -95,7 +101,7 @@ class Store:
             sql += f" LIMIT {int(limit)}"
         rows = self.conn.execute(sql, args).fetchall()
         return [Bar(r[0], datetime.fromisoformat(r[2]).astimezone(JST), r[1], r[3], r[4], r[5],
-                    r[6], r[7], r[8], bool(r[9])) for r in reversed(rows)]
+                    r[6], r[7], r[8], bool(r[9]), r[10]) for r in reversed(rows)]
 
     def save_watchlist(self, day: str, rows: list[dict]) -> None:
         self.conn.execute("DELETE FROM watchlist WHERE day=?", (day,))
@@ -132,18 +138,19 @@ class Store:
             "SELECT DISTINCT symbol FROM bars WHERE minutes=? ORDER BY symbol", (minutes,))]
 
     def add_signal(self, mode: str, strategy_id: str, symbol: str, time: datetime,
-                   price: float, pattern_low: float, action: str, note: str = "") -> None:
+                   price: float, pattern_low: float, action: str, note: str = "",
+                   vwap: float | None = None) -> None:
         self.conn.execute(
-            "INSERT INTO signals (mode,strategy_id,symbol,time,price,pattern_low,action,note) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (mode, strategy_id, symbol, time.isoformat(), price, pattern_low, action, note))
+            "INSERT INTO signals (mode,strategy_id,symbol,time,price,pattern_low,action,note,vwap) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (mode, strategy_id, symbol, time.isoformat(), price, pattern_low, action, note, vwap))
         self.conn.commit()
 
     def recent_signals(self, mode: str, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT strategy_id,symbol,time,price,pattern_low,action,note FROM signals "
+            "SELECT strategy_id,symbol,time,price,pattern_low,action,note,vwap FROM signals "
             "WHERE mode=? ORDER BY id DESC LIMIT ?", (mode, limit)).fetchall()
-        keys = ("strategy_id", "symbol", "time", "price", "pattern_low", "action", "note")
+        keys = ("strategy_id", "symbol", "time", "price", "pattern_low", "action", "note", "vwap")
         return [dict(zip(keys, r)) for r in rows]
 
     _TRADE_COLS = ("mode", "strategy_id", "symbol", "signal_time", "entry_time", "entry_price",

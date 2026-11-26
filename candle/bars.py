@@ -33,6 +33,7 @@ class Bar:
     volume: float = 0.0
     ticks: int = 0
     complete: bool = True
+    vwap: float | None = None   # 足の確定時点のVWAP（配信で受信した値。無ければ None）
 
     @property
     def end(self) -> datetime:
@@ -84,6 +85,7 @@ class BarBuilder:
         cum_volume: float | None,
         day_high: float | None = None,
         day_low: float | None = None,
+        vwap: float | None = None,
     ) -> list[Bar]:
         """1件の配信を取り込み、確定した足があれば返す。
 
@@ -150,6 +152,8 @@ class BarBuilder:
 
         b = st.bar
         b.close = price
+        if vwap:
+            b.vwap = float(vwap)
         b.high = max(b.high, price)
         b.low = min(b.low, price)
         # 配信の合間に付いた高値・安値を当日高安の更新から拾う

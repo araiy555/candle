@@ -118,6 +118,7 @@ class App:
         if old is not None:   # 受信済みの足や価格は引き継ぐ（切り替えで判定を途切れさせない）
             engine.history, engine.prices = old.history, old.prices
             engine.watchlist, engine.names = old.watchlist, old.names
+            engine.quotes = old.quotes
             engine.auto_chart = old.auto_chart
             engine.risk.feed_ok = old.risk.feed_ok
             if engine.flow is not None and old.flow is not None:

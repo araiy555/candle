@@ -59,7 +59,8 @@ class Pipeline:
         if ts is None or not slim["Symbol"]:
             return []
         bars = self.builder.on_tick(str(slim["Symbol"]), ts, slim["CurrentPrice"],
-                                    slim["TradingVolume"], slim["HighPrice"], slim["LowPrice"])
+                                    slim["TradingVolume"], slim["HighPrice"], slim["LowPrice"],
+                                    slim["VWAP"])
         self._emit(bars)
         if self.on_price and slim["CurrentPrice"] is not None:
             self.on_price(str(slim["Symbol"]), float(slim["CurrentPrice"]), ts)

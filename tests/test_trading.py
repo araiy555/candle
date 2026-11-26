@@ -346,3 +346,27 @@ def test_no_signals_during_quiet_period_after_the_open():
         e.on_bar(b)
     assert len(sent) == 2
     assert not e.in_quiet_open(T0.replace(hour=12, minute=31))    # 後場の寄り付きは対象外
+
+
+def test_vwap_is_shown_but_not_used_as_a_condition():
+    from candle.collector import Pipeline
+    store = Store(":memory:")
+    rm = RiskManager(RiskLimits())
+    rm.feed_ok = True
+    e = PaperEngine(store, rm, enabled={"hammer"}, slippage=0.0)
+    pipe = Pipeline(store, 1, on_bar=e.on_bar, on_price=e.on_price, on_board=e.on_board)
+    msg = lambda t, price, cum, vwap: {"Symbol": "T", "CurrentPrice": price, "TradingVolume": cum,
+                                       "CurrentPriceTime": f"2026-11-24T{t}+09:00", "VWAP": vwap,
+                                       "ChangePreviousClosePer": -1.2, "HighPrice": 1100}
+    pipe.handle(msg("09:59:50", 1000, 100, 1050.0))
+    pipe.handle(msg("10:00:10", 1001, 200, 1049.5))
+    pipe.handle(msg("10:01:05", 1002, 300, 1049.0))
+    (bar,) = store.load_bars("T", 1)
+    assert bar.vwap == 1049.5                                    # 足の確定時点のVWAPを保存
+    assert e.vwap("T") == 1049.0 and e.quotes["T"]["HighPrice"] == 1100
+    assert e.chart_data("T")["quote"]["VWAP"] == 1049.0 and e.chart_data("T")["bars"][0]["vwap"] == 1049.5
+    t0 = feed_hammer(e, "T")                                     # VWAPより下でもサインは出て買う
+    e.on_price("T", 1006, t0)
+    assert len(e.open) == 1 and store.recent_signals("paper")[0]["vwap"] == 1049.0
+    e.on_clock(t0)
+    assert e.snapshot["positions"][0]["vwap"] == 1049.0
