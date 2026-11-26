@@ -34,7 +34,7 @@ dialog{border:1px solid var(--line);border-radius:10px;background:var(--card);co
 dialog::backdrop{background:rgba(0,0,0,.45)}
 .dh{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
 .dh b{font-size:16px;margin-right:8px}.dh a{color:var(--acc);font-size:13px}
-.chart{position:relative;padding:8px 8px 12px}.chart svg{display:block;width:100%;height:360px}
+.chart{position:relative;padding:8px 8px 12px}.chart svg{display:block;width:100%;height:460px}
 .tip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;font-variant-numeric:tabular-nums}
 .note{color:var(--mut);font-size:12px;padding:0 16px 12px}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
@@ -156,7 +156,7 @@ function ticks(lo,hi,count){const raw=(hi-lo)/count,p=Math.pow(10,Math.floor(Mat
   for(let v=Math.ceil(lo/step)*step;v<=hi+1e-9;v+=step)out.push(v);return out}
 function draw(data){
   const svg=$('svg'),tip=$('tip'),bars=data.bars;svg.innerHTML='';tip.style.display='none';
-  const W=svg.clientWidth||900,H=360,L=8,R=64,T=14,B=26;svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const W=svg.clientWidth||900,H=460,L=8,R=64,T=14,VH=84,VG=22,B=26+VH+VG;svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
   if(!bars.length){svg.appendChild(el('text',{x:W/2,y:H/2,'text-anchor':'middle',fill:'var(--mut)','font-size':13},'まだ足がありません（起動後に確定した足から表示します）'));return}
   const marks=(state?.signals||[]).filter(s=>s.symbol===data.symbol);
   const vw=bars.map(b=>b.vwap).filter(v=>v);
@@ -170,6 +170,14 @@ function draw(data){
   bars.forEach((b,i)=>{if(i%every===0)svg.appendChild(el('text',{x:Math.max(x(i),L+16),y:H-8,'text-anchor':'middle',fill:'var(--mut)','font-size':11},
     new Date(b.t).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'})))});
   const w=Math.max(1,Math.min(14,bw*0.7));
+  // 出来高（株価とは別の枠。縦軸は共有しない）
+  const vTop=H-26-VH,vBot=H-26,vmax=Math.max(...bars.map(b=>b.v),1),vy=v=>vBot-(v/vmax)*VH;
+  svg.appendChild(el('line',{x1:L,x2:W-R,y1:vBot,y2:vBot,stroke:'var(--line)','stroke-width':1}));
+  svg.appendChild(el('text',{x:L,y:vTop-6,fill:'var(--mut)','font-size':11},'出来高（1本ごと）'));
+  svg.appendChild(el('text',{x:W-R+6,y:vTop+4,fill:'var(--mut)','font-size':11},vmax.toLocaleString('ja-JP')));
+  svg.appendChild(el('text',{x:W-R+6,y:vBot+4,fill:'var(--mut)','font-size':11},'0'));
+  bars.forEach((b,i)=>{if(!(b.v>0))return;const col=b.c>b.o?'var(--up)':b.c<b.o?'var(--down)':'var(--mut)';
+    svg.appendChild(el('rect',{x:x(i)-w/2,y:vy(b.v),width:w,height:Math.max(1,vBot-vy(b.v)),fill:col,opacity:b.ok?.75:.3}))});
   bars.forEach((b,i)=>{const col=b.c>b.o?'var(--up)':b.c<b.o?'var(--down)':'var(--mut)',g=el('g',{opacity:b.ok?1:.35});
     g.appendChild(el('line',{x1:x(i),x2:x(i),y1:y(b.h),y2:y(b.l),stroke:col,'stroke-width':1}));
     const top=y(Math.max(b.o,b.c)),h=Math.max(1,y(Math.min(b.o,b.c))-top);
@@ -182,8 +190,8 @@ function draw(data){
     svg.appendChild(el('line',{x1:x(i)-bw,x2:W-R,y1:py,y2:py,stroke:'var(--fg)','stroke-width':1,'stroke-dasharray':'4 3',opacity:.6}));
     svg.appendChild(el('path',{d:`M${x(i)},${py+6} l6,10 h-12 z`,fill:'var(--fg)'}));
     const right=x(i)+140>W-R;svg.appendChild(el('text',{x:x(i)+(right?-10:10),y:py+17,'text-anchor':right?'end':'start',fill:'var(--fg)','font-size':11},`${m.strategy} 安値 ${fmt(m.pattern_low)}`))}
-  const cross=el('line',{y1:T,y2:H-B,stroke:'var(--mut)','stroke-width':1,opacity:0});svg.appendChild(cross);
-  const hit=el('rect',{x:L,y:T,width:W-L-R,height:H-T-B,fill:'transparent'});svg.appendChild(hit);
+  const cross=el('line',{y1:T,y2:H-26,stroke:'var(--mut)','stroke-width':1,opacity:0});svg.appendChild(cross);
+  const hit=el('rect',{x:L,y:T,width:W-L-R,height:H-T-26,fill:'transparent'});svg.appendChild(hit);
   hit.onmousemove=e=>{const r=svg.getBoundingClientRect(),px=(e.clientX-r.left)*W/r.width,i=Math.max(0,Math.min(bars.length-1,Math.floor((px-L)/bw))),b=bars[i];
     cross.setAttribute('x1',x(i));cross.setAttribute('x2',x(i));cross.setAttribute('opacity',.7);
     tip.innerHTML=`<b>${new Date(b.t).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'})}</b>${b.ok?'':' <span class="mut">（不完全）</span>'}<br>始 ${fmt(b.o)}　高 ${fmt(b.h)}<br>安 ${fmt(b.l)}　終 ${fmt(b.c)}<br>出来高 ${n(b.v)}<br>VWAP ${b.vwap?fmt(b.vwap)+'（終値との差 '+vdiff(b.c,b.vwap)+'）':'データなし'}`;
@@ -196,7 +204,7 @@ async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?
   $('qinfo').innerHTML=[['現在値',m(q.CurrentPrice)||n(q.CurrentPrice,1)+'円'],['前日比',m(q.ChangePreviousClose)||`<span class="${q.ChangePreviousClose>0?'pos':q.ChangePreviousClose<0?'neg':''}">${q.ChangePreviousClose>0?'+':''}${n(q.ChangePreviousClose,1)}円（${q.ChangePreviousClosePer>0?'+':''}${n(q.ChangePreviousClosePer,2)}%）</span>`],
     ['VWAP',m(q.VWAP)||n(q.VWAP,1)+'円'],['VWAPとの差',vdiff(q.CurrentPrice,q.VWAP)],['始値',m(q.OpeningPrice)||n(q.OpeningPrice,1)],['高値',m(q.HighPrice)||n(q.HighPrice,1)],['安値',m(q.LowPrice)||n(q.LowPrice,1)],
     ['出来高',m(q.TradingVolume)||n(q.TradingVolume)+'株'],['売買代金',m(q.TradingValue)||n(q.TradingValue/1e8,1)+'億円']].map(([k,v])=>`<div><span>${k}</span><b style="font-size:15px">${v}</b></div>`).join('');
-  $('note').textContent=`${d.minutes||''}分足・当日分（このプログラムが起動中に受信した足）。赤=陽線、緑=陰線、薄い足=データ欠落を含む足。▲と点線はサインとパターン安値。`;
+  $('note').textContent=`${d.minutes||''}分足・当日分（このプログラムが起動中に受信した足）。赤=陽線、緑=陰線、薄い足=データ欠落を含む足。▲と点線はサインとパターン安値。下の棒は1本ごとの出来高。`;
   if(!$('tip').style.display||$('tip').style.display==='none')draw(d)}
 function openChart(sym){cur=sym;$('l1').href=`https://finance.yahoo.co.jp/quote/${sym}.T/chart`;$('l2').href=`https://jp.tradingview.com/chart/?symbol=TSE%3A${sym}`;
   $('l3').href=`https://kabutan.jp/stock/chart?code=${sym}`;$('copy').textContent='銘柄コードをコピー';$('kmsg').textContent='';$('svg').innerHTML='';$('dt').textContent=sym;$('dlg').showModal();chart()}
