@@ -146,7 +146,7 @@ class PaperEngine:
                 self.drops[(s.id, bar.symbol, bar.end.isoformat())] = drop_pct
                 self.pending[bar.symbol].append((s.id, bar.end, low))
             else:
-                self.store.add_signal(self.mode, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ",
+                self._signal(self.mode, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ",
                                       vwap=self.vwap(bar.symbol), drop_pct=drop_pct)
 
     def in_quiet_open(self, ts: datetime) -> bool:
@@ -154,6 +154,23 @@ class PaperEngine:
         ts = ts.astimezone(JST)
         minutes = (ts.hour - 9) * 60 + ts.minute + ts.second / 60
         return 0 <= minutes < self.settings.quiet_open_min
+
+    def _signal(self, mode, strategy_id, symbol, *args, **kw) -> None:
+        """サインを保存する。そのときの平均値幅率も一緒に残す。"""
+        self.store.add_signal(mode, strategy_id, symbol, *args, range_pct=self.range_pct(symbol), **kw)
+
+    def range_pct(self, symbol: str, n: int = 30) -> float | None:
+        """足1本あたりの平均値幅率（%）。直近 n 本の（高値−安値）÷終値の平均。5本未満なら None。"""
+        bars = [b for b in list(self.history.get(symbol, ()))[-n:] if b.complete and b.close > 0]
+        if len(bars) < 5:
+            return None
+        return sum((b.high - b.low) / b.close for b in bars) / len(bars) * 100
+
+    def day_range_pct(self, symbol: str) -> float | None:
+        """当日の値幅率（%）。（当日高値−当日安値）÷始値。受信していなければ None。"""
+        q = self.quotes.get(symbol) or {}
+        hi, lo, op = q.get("HighPrice"), q.get("LowPrice"), q.get("OpeningPrice")
+        return (hi - lo) / op * 100 if hi and lo and op else None
 
     def vwap(self, symbol: str) -> float | None:
         v = (self.quotes.get(symbol) or {}).get("VWAP")
@@ -190,7 +207,7 @@ class PaperEngine:
                 self.notify(f"{name}  {label}", f"{ev.time:%H:%M:%S} {ev.price:,.1f}円　{ev.note}", symbol)
             if self.auto_chart and self.on_auto_chart:
                 self.on_auto_chart(symbol)
-            self.store.add_signal(self.mode, sid, symbol, ev.time, ev.price, ev.wall.price, "通知のみ",
+            self._signal(self.mode, sid, symbol, ev.time, ev.price, ev.wall.price, "通知のみ",
                                   ev.note, self.vwap(symbol))
 
     def _check_sweep(self, bar: Bar, history) -> None:
@@ -215,7 +232,7 @@ class PaperEngine:
             self.notify(f"{name}  {label}", f"{bar.end:%H:%M} {sig.note}", bar.symbol)
         if self.auto_chart and self.on_auto_chart:
             self.on_auto_chart(bar.symbol)
-        self.store.add_signal(self.mode, SWEEP_STRATEGY, bar.symbol, bar.end, bar.close, sig.low,
+        self._signal(self.mode, SWEEP_STRATEGY, bar.symbol, bar.end, bar.close, sig.low,
                               "通知のみ", sig.note, self.vwap(bar.symbol))
 
     def _check_fvg(self, bar: Bar, history) -> None:
@@ -240,7 +257,7 @@ class PaperEngine:
             self.notify(f"{name}  {label}", f"{bar.end:%H:%M} 終値 {bar.close:,.1f}　{sig.note}", bar.symbol)
         if self.auto_chart and self.on_auto_chart:
             self.on_auto_chart(bar.symbol)
-        self.store.add_signal(self.mode, sid, bar.symbol, bar.end, bar.close, sig.bottom, "通知のみ",
+        self._signal(self.mode, sid, bar.symbol, bar.end, bar.close, sig.bottom, "通知のみ",
                               sig.note, self.vwap(bar.symbol))
 
     def capacity(self) -> float | None:
@@ -295,7 +312,7 @@ class PaperEngine:
             self.notes[key] = sig.note
             self.pending[symbol].append((FLOW_STRATEGY, sig.time, sig.low))
         else:
-            self.store.add_signal(self.mode, FLOW_STRATEGY, symbol, sig.time, sig.price, sig.low,
+            self._signal(self.mode, FLOW_STRATEGY, symbol, sig.time, sig.price, sig.low,
                                   "通知のみ", sig.note, self.vwap(symbol))
 
     def on_price(self, symbol: str, price: float, ts: datetime) -> None:
@@ -343,7 +360,7 @@ class PaperEngine:
         st = self.settings
         stop = st.initial_stop(entry, low)
         qty, why = self._check(strategy_id, symbol, entry, stop, ts)
-        self.store.add_signal(self.mode, strategy_id, symbol, sig_time, price, low, why,
+        self._signal(self.mode, strategy_id, symbol, sig_time, price, low, why,
                               self.notes.pop((strategy_id, symbol, sig_time.isoformat()), ""),
                               self.vwap(symbol),
                               self.drops.pop((strategy_id, symbol, sig_time.isoformat()), None))
@@ -351,7 +368,8 @@ class PaperEngine:
             log.info("見送り %s %s: %s", strategy_id, symbol, why)
             return
         t = Trade(self.mode, strategy_id, symbol, sig_time, ts, entry, qty, stop, stop, high=entry,
-                  trail_mode=st.trail_mode, trail_value=st.trail_value, pattern_low=low)
+                  trail_mode=st.trail_mode, trail_value=st.trail_value, pattern_low=low,
+                  range_pct=self.range_pct(symbol))
         self.store.save_trade(t)
         self.open.append(t)
         log.info("仮想買い %s %s %d株 @%.1f 損切り%.1f", strategy_id, symbol, qty, entry, stop)
@@ -419,6 +437,7 @@ class PaperEngine:
         return dict(symbol=symbol, name=self.names.get(symbol),
                     minutes=bars[0].minutes if bars else None,
                     quote=self.quotes.get(symbol),
+                    range_pct=self.range_pct(symbol), day_range_pct=self.day_range_pct(symbol),
                     structure=fvg.structure(contiguous_tail(bars[-200:]), self.fvg_params) if bars else None,
                     pools=[dict(t=tail[i].start.isoformat(), level=lv)
                            for tail in [contiguous_tail(bars[-200:])]
@@ -440,6 +459,7 @@ class PaperEngine:
                 state=self.state_label(t), name=self.names.get(t.symbol),
                 signal_time=t.signal_time.isoformat(), entry_price=t.entry_price, price=px,
                 initial_stop=t.initial_stop, stop=t.stop, vwap=self.vwap(t.symbol),
+                range_pct=self.range_pct(t.symbol),
                 next_raise=t.next_raise(), trail_mode=t.trail_mode, trail_value=t.trail_value,
                 pnl=None if px is None else t.pnl(px),
                 r=None if px is None else t.r_multiple(px),
@@ -447,7 +467,8 @@ class PaperEngine:
         history = [dict(strategy=name(t.strategy_id), symbol=t.symbol, qty=t.qty,
                         entry_time=t.entry_time.isoformat(), entry_price=t.entry_price,
                         exit_time=t.exit_time.isoformat(), exit_price=t.exit_price,
-                        reason=t.exit_reason, pnl=t.pnl(), r=t.r_multiple())
+                        reason=t.exit_reason, pnl=t.pnl(), r=t.r_multiple(), range_pct=t.range_pct,
+                        stop_pct=(t.entry_price - t.initial_stop) / t.entry_price * 100)
                    for t in reversed(trades) if not t.is_open][:200]
         signals = self.store.recent_signals(self.mode, 50)
         for s in signals:
@@ -466,6 +487,7 @@ class PaperEngine:
             exposure=sum(t.entry_price * t.qty for t in self.open),
             watchlist=[dict(symbol=s, name=self.names.get(s), price=self.prices.get(s),
                             vwap=self.vwap(s),
+                            range_pct=self.range_pct(s), day_range_pct=self.day_range_pct(s),
                             change_pct=(self.quotes.get(s) or {}).get("ChangePreviousClosePer"))
                        for s in self.watchlist],
             positions=positions, signals=signals, history=history,

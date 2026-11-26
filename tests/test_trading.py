@@ -425,3 +425,29 @@ def test_live_capacity_adds_back_open_positions():
     assert e.capacity() == 3_000_000                              # 余力は減っているので足し戻す
     e.update_settings({"size_mode": "percent", "per_trade_pct": 10, "total_pct": 50})
     assert e.risk.limits.total_cap == 1_500_000 and e.risk.limits.per_symbol_cap == 300_000
+
+
+def test_average_range_ratio_is_shown_and_recorded():
+    e, store = engine()
+    assert e.range_pct("T") is None                               # 足が5本未満なら出さない
+    t0 = feed_hammer(e)
+    r = e.range_pct("T")
+    bars = make_bars(HAMMER)
+    expect = sum((b.high - b.low) / b.close for b in bars) / len(bars) * 100
+    assert abs(r - expect) < 1e-9 and 1.0 < r < 1.6
+    e.quotes["T"] = {"HighPrice": 1072.0, "LowPrice": 985.0, "OpeningPrice": 1070.0}
+    assert round(e.day_range_pct("T"), 2) == 8.13 and e.day_range_pct("X") is None
+    e.on_price("T", 1006, t0)
+    (t,) = e.open
+    assert abs(t.range_pct - r) < 1e-9
+    assert abs(store.recent_signals("paper")[0]["range_pct"] - r) < 1e-9
+    assert abs(store.load_trades("paper")[0].range_pct - r) < 1e-9   # 保存して読み直しても残る
+    e.watchlist = ["T"]
+    e.on_clock(t0)
+    snap = e.snapshot
+    assert abs(snap["positions"][0]["range_pct"] - r) < 1e-9 and abs(snap["watchlist"][0]["range_pct"] - r) < 1e-9
+    assert abs(e.chart_data("T")["range_pct"] - r) < 1e-9
+    e.on_price("T", 980, t0 + timedelta(seconds=5))
+    e.on_clock(t0 + timedelta(seconds=6))
+    h = e.snapshot["history"][0]
+    assert abs(h["range_pct"] - r) < 1e-9 and round(h["stop_pct"], 2) == round((1006 - 985) / 1006 * 100, 2)

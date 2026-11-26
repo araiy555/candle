@@ -63,13 +63,15 @@ class Store:
                           ("tick_group", "TEXT NOT NULL DEFAULT '10000'"),
                           ("exit_qty", "INTEGER NOT NULL DEFAULT 0"),
                           ("exit_value", "REAL NOT NULL DEFAULT 0"),
-                          ("holds", "TEXT NOT NULL DEFAULT ''")):
+                          ("holds", "TEXT NOT NULL DEFAULT ''"), ("range_pct", "REAL")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
         if "vwap" not in {r[1] for r in self.conn.execute("PRAGMA table_info(bars)")}:
             self.conn.execute("ALTER TABLE bars ADD COLUMN vwap REAL")
         if "vwap" not in {r[1] for r in self.conn.execute("PRAGMA table_info(signals)")}:
             self.conn.execute("ALTER TABLE signals ADD COLUMN vwap REAL")
+        if "range_pct" not in {r[1] for r in self.conn.execute("PRAGMA table_info(signals)")}:
+            self.conn.execute("ALTER TABLE signals ADD COLUMN range_pct REAL")
         if "drop_pct" not in {r[1] for r in self.conn.execute("PRAGMA table_info(signals)")}:
             self.conn.execute("ALTER TABLE signals ADD COLUMN drop_pct REAL")
         if "note" not in {r[1] for r in self.conn.execute("PRAGMA table_info(signals)")}:
@@ -141,27 +143,28 @@ class Store:
 
     def add_signal(self, mode: str, strategy_id: str, symbol: str, time: datetime,
                    price: float, pattern_low: float, action: str, note: str = "",
-                   vwap: float | None = None, drop_pct: float | None = None) -> None:
+                   vwap: float | None = None, drop_pct: float | None = None,
+                   range_pct: float | None = None) -> None:
         self.conn.execute(
             "INSERT INTO signals (mode,strategy_id,symbol,time,price,pattern_low,action,note,vwap,"
-            "drop_pct) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "drop_pct,range_pct) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (mode, strategy_id, symbol, time.isoformat(), price, pattern_low, action, note, vwap,
-             drop_pct))
+             drop_pct, range_pct))
         self.conn.commit()
 
     def recent_signals(self, mode: str, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT strategy_id,symbol,time,price,pattern_low,action,note,vwap,drop_pct "
+            "SELECT strategy_id,symbol,time,price,pattern_low,action,note,vwap,drop_pct,range_pct "
             "FROM signals WHERE mode=? ORDER BY id DESC LIMIT ?", (mode, limit)).fetchall()
         keys = ("strategy_id", "symbol", "time", "price", "pattern_low", "action", "note", "vwap",
-                "drop_pct")
+                "drop_pct", "range_pct")
         return [dict(zip(keys, r)) for r in rows]
 
     _TRADE_COLS = ("mode", "strategy_id", "symbol", "signal_time", "entry_time", "entry_price",
                    "qty", "initial_stop", "stop", "high", "exit_time", "exit_price", "exit_reason",
                    "trail_mode", "trail_value", "pattern_low", "state", "entry_order",
                    "stop_order", "exit_order", "server_stop", "tick_group", "exit_qty",
-                   "exit_value", "holds")
+                   "exit_value", "holds", "range_pct")
     _TIME_COLS = ("signal_time", "entry_time", "exit_time")
 
     def save_trade(self, t: Trade) -> None:

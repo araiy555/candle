@@ -24,7 +24,7 @@ tr:last-child td{border-bottom:0}.pos{color:var(--up)}.neg{color:var(--down)}.mu
 button{font:inherit;white-space:nowrap;padding:6px 14px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
 button.stop{background:#c0392b;border-color:#c0392b;color:#fff;font-weight:600}
 .kpis{display:flex;flex-wrap:wrap;gap:20px}.kpis>div>span{display:block;color:var(--mut);font-size:12px}.kpis b{font-size:18px;white-space:nowrap}
-.watch{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}
+.watch{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:6px}
 .watch div{border:1px solid var(--line);border-radius:6px;padding:4px 8px;display:flex;justify-content:space-between}
 .empty{color:var(--mut);padding:8px 0}
 .link{cursor:pointer;color:var(--acc);text-decoration:underline;text-underline-offset:2px;background:none;border:0;padding:0;font:inherit}
@@ -106,6 +106,7 @@ let halted=false,state=null,cur=null,formLoaded=false;const closing=new Set();
 const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth'];
 function vdiff(price,vwap){if(price==null||!vwap)return '<span class="mut">-</span>';const d=(price-vwap)/vwap*100;return `<span class="${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${n(d,2)}%</span>`}
 function vcell(price,vwap){return vwap?`${n(vwap,1)} <span style="font-size:12px">(${vdiff(price,vwap)})</span>`:'<span class="mut">-</span>'}
+const rng=v=>v==null?'<span class="mut">-</span>':n(v,2)+'%';
 function nextRaise(p){if(p.next_raise)return `${n(p.next_raise[0],1)} で ${n(p.next_raise[1],1)} へ`;
   if(p.trail_mode==='percent')return `<span class="mut">高値の${n(p.trail_value,2)}%下</span>`;if(p.trail_mode==='yen')return `<span class="mut">高値の${n(p.trail_value,1)}円下</span>`;return '<span class="mut">なし</span>'}
 function example(){
@@ -147,20 +148,20 @@ async function load(){
   $('kpis').innerHTML=[['含み損益',yen(unreal)+' 円'],['本日の確定損益',yen(d.realized_today)+' 円'],
     ['投資額 / 上限',n(d.exposure)+' / '+n(d.limits.total_cap)+' 円'],['1回の買いの上限',n(d.limits.per_symbol_cap)+' 円'],['信用の買付余力',d.buying_power==null?`<span class="mut" style="font-size:13px">${esc(d.buying_power_note||'未取得')}</span>`:n(d.buying_power)+' 円'],['1日の最大損失',n(d.limits.daily_max_loss)+' 円'],
     ['保有数',d.positions.length]].map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('');
-  table('positions',['戦略','銘柄','状態','株数','サイン時刻','エントリー','現在値','VWAP（現在値との差）','初期損切り','現在の損切り','次の引き上げ','含み損益','R','保有時間',''],
-    d.positions.map(p=>[esc(p.strategy),`<button class="link" data-sym="${esc(p.symbol)}">${esc(p.symbol)} ${esc(p.name||'')}</button>`,esc(p.state),n(p.qty),hm(p.signal_time),n(p.entry_price,1),n(p.price,1),vcell(p.price,p.vwap),n(p.initial_stop,1),
+  table('positions',['戦略','銘柄','状態','株数','サイン時刻','エントリー','現在値','VWAP（現在値との差）','平均値幅率','初期損切り','現在の損切り','次の引き上げ','含み損益','R','保有時間',''],
+    d.positions.map(p=>[esc(p.strategy),`<button class="link" data-sym="${esc(p.symbol)}">${esc(p.symbol)} ${esc(p.name||'')}</button>`,esc(p.state),n(p.qty),hm(p.signal_time),n(p.entry_price,1),n(p.price,1),vcell(p.price,p.vwap),rng(p.range_pct),n(p.initial_stop,1),
       n(p.stop,1),nextRaise(p),yen(p.pnl),rr(p.r),n(p.hold_min)+'分',closing.has(p.id)||p.state==='決済中'?'<span class="mut">決済中…</span>':`<button data-close="${p.id}" data-label="${esc(p.symbol)} ${esc(p.name||'')} ${n(p.qty)}株" style="padding:2px 12px">決済</button>`]),'保有ポジションはありません');
   for(const id of [...closing])if(!d.positions.some(p=>p.id===id))closing.delete(id);
   table('stats',['戦略','取引数','勝率','PF','期待損益(円)','期待値(R)','合計損益(円)','平均保有'],
     d.stats.map(s=>[esc(s.strategy),s.trades,s.win_rate==null?'-':n(s.win_rate*100,1)+'%',s.pf==null?'-':n(s.pf,2),
       yen(s.expectancy),rr(s.expectancy_r),yen(s.total),s.avg_hold_min==null?'-':n(s.avg_hold_min)+'分']),'');
-  table('signals',['戦略','銘柄','発生時刻','価格','VWAP比','直前の下落率','安値','内容','結果'],
-    d.signals.map(s=>[esc(s.strategy),`<button class="link" data-sym="${esc(s.symbol)}">${esc(s.symbol)} ${esc(s.name||'')}</button> <button data-kabu="${esc(s.symbol)}" style="padding:1px 8px;font-size:12px">kabuステで表示</button>`,md(s.time),n(s.price,1),vdiff(s.price,s.vwap),s.drop_pct==null?'<span class="mut">-</span>':'-'+n(s.drop_pct,2)+'%',n(s.pattern_low,1),`<span class="l mut" style="white-space:normal;display:inline-block;max-width:420px;text-align:left">${esc(s.note||'')}</span>`,
+  table('signals',['戦略','銘柄','発生時刻','価格','VWAP比','平均値幅率','直前の下落率','安値','内容','結果'],
+    d.signals.map(s=>[esc(s.strategy),`<button class="link" data-sym="${esc(s.symbol)}">${esc(s.symbol)} ${esc(s.name||'')}</button> <button data-kabu="${esc(s.symbol)}" style="padding:1px 8px;font-size:12px">kabuステで表示</button>`,md(s.time),n(s.price,1),vdiff(s.price,s.vwap),rng(s.range_pct),s.drop_pct==null?'<span class="mut">-</span>':'-'+n(s.drop_pct,2)+'%',n(s.pattern_low,1),`<span class="l mut" style="white-space:normal;display:inline-block;max-width:420px;text-align:left">${esc(s.note||'')}</span>`,
       s.action==='entry'?'エントリー':s.action==='通知のみ'?'通知':'<span class="mut">見送り: '+esc(s.action)+'</span>']),'まだサインはありません');
-  table('history',['戦略','銘柄','株数','買い','買値','決済','売値','理由','損益(円)','R'],
+  table('history',['戦略','銘柄','株数','買い','買値','決済','売値','理由','損益(円)','R','平均値幅率','損切り幅÷値幅'],
     d.history.map(t=>[esc(t.strategy),esc(t.symbol),n(t.qty),md(t.entry_time),n(t.entry_price,1),md(t.exit_time),n(t.exit_price,1),
-      esc(t.reason),yen(t.pnl),rr(t.r)]),'決済済みの取引はありません');
-  $('watch').innerHTML=d.watchlist.map(w=>`<button class="w" data-sym="${esc(w.symbol)}"><span>${esc(w.symbol)} <span class="mut">${esc(w.name||'')}</span></span><span style="text-align:right">${n(w.price,1)}<br><span style="font-size:11px" class="mut">VWAP比 ${vdiff(w.price,w.vwap)}</span></span></button>`).join('')||'<div class="empty">未登録</div>';
+      esc(t.reason),yen(t.pnl),rr(t.r),rng(t.range_pct),t.range_pct?n(t.stop_pct/t.range_pct,1)+'倍':'<span class="mut">-</span>']),'決済済みの取引はありません');
+  $('watch').innerHTML=d.watchlist.map(w=>`<button class="w" data-sym="${esc(w.symbol)}"><span>${esc(w.symbol)} <span class="mut">${esc(w.name||'')}</span></span><span style="text-align:right">${n(w.price,1)}<br><span style="font-size:11px" class="mut">VWAP比 ${vdiff(w.price,w.vwap)}　値幅 ${rng(w.range_pct)}</span></span></button>`).join('')||'<div class="empty">未登録</div>';
 }
 $('btn').onclick=async()=>{
   if(!halted&&!confirm('新規の買いを停止します。保有中のポジションの損切り・決済は継続します。'))return;
@@ -240,8 +241,8 @@ async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?
   const q=d.quote||{},m=v=>v==null?'<span class="mut">-</span>':null;
   $('qinfo').innerHTML=[['現在値',m(q.CurrentPrice)||n(q.CurrentPrice,1)+'円'],['前日比',m(q.ChangePreviousClose)||`<span class="${q.ChangePreviousClose>0?'pos':q.ChangePreviousClose<0?'neg':''}">${q.ChangePreviousClose>0?'+':''}${n(q.ChangePreviousClose,1)}円（${q.ChangePreviousClosePer>0?'+':''}${n(q.ChangePreviousClosePer,2)}%）</span>`],
     ['VWAP',m(q.VWAP)||n(q.VWAP,1)+'円'],['VWAPとの差',vdiff(q.CurrentPrice,q.VWAP)],['始値',m(q.OpeningPrice)||n(q.OpeningPrice,1)],['高値',m(q.HighPrice)||n(q.HighPrice,1)],['安値',m(q.LowPrice)||n(q.LowPrice,1)],
-    ['出来高',m(q.TradingVolume)||n(q.TradingVolume)+'株'],['売買代金',m(q.TradingValue)||n(q.TradingValue/1e8,1)+'億円']].map(([k,v])=>`<div><span>${k}</span><b style="font-size:15px">${v}</b></div>`).join('');
-  $('note').textContent=`${d.minutes||''}分足・当日分（このプログラムが起動中に受信した足）。赤=陽線、緑=陰線、薄い足=データ欠落を含む足。▲と点線はサインとパターン安値。下の棒は1本ごとの出来高。`;
+    ['足の平均値幅率',rng(d.range_pct)],['当日の値幅率',rng(d.day_range_pct)],['出来高',m(q.TradingVolume)||n(q.TradingVolume)+'株'],['売買代金',m(q.TradingValue)||n(q.TradingValue/1e8,1)+'億円']].map(([k,v])=>`<div><span>${k}</span><b style="font-size:15px">${v}</b></div>`).join('');
+  $('note').textContent=`${d.minutes||''}分足・当日分（このプログラムが起動中に受信した足）。赤=陽線、緑=陰線、薄い足=データ欠落を含む足。▲と点線はサインとパターン安値。下の棒は1本ごとの出来高。足の平均値幅率は、直近30本の（高値−安値）÷終値の平均。`;
   if(!$('tip').style.display||$('tip').style.display==='none')draw(d)}
 function openChart(sym){cur=sym;$('l1').href=`https://finance.yahoo.co.jp/quote/${sym}.T/chart`;$('l2').href=`https://jp.tradingview.com/chart/?symbol=TSE%3A${sym}`;
   $('l3').href=`https://kabutan.jp/stock/chart?code=${sym}`;$('copy').textContent='銘柄コードをコピー';$('kmsg').textContent='';$('svg').innerHTML='';$('dt').textContent=sym;$('dlg').showModal();chart()}
