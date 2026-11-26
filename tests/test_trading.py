@@ -451,3 +451,31 @@ def test_average_range_ratio_is_shown_and_recorded():
     e.on_clock(t0 + timedelta(seconds=6))
     h = e.snapshot["history"][0]
     assert abs(h["range_pct"] - r) < 1e-9 and round(h["stop_pct"], 2) == round((1006 - 985) / 1006 * 100, 2)
+
+
+def test_low_priced_symbols_are_excluded():
+    store = Store(":memory:")
+    sent = []
+    e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"}, trade_enabled=False,
+                    notify=lambda *a: sent.append(a), notify_ids={"tweezer_bottom", "squeeze"})
+    assert e.settings.min_price == 500
+    cheap = [(o / 6, h / 6, l / 6, c / 6) for o, h, l, c in DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)]]
+    for b in make_bars(cheap, "9432"):                            # 168円前後
+        e.on_bar(b)
+    assert sent == [] and len(e.history["9432"]) == 8             # 足は貯めるが、サインは出さない
+    e.update_settings({"min_price": 0})
+    for b in make_bars(cheap, "9434"):
+        e.on_bar(b)
+    assert len(sent) == 1
+    e.update_settings({"min_price": 500})
+    e.watchlist = ["9432", "7203"]
+    e.prices.update({"9432": 168.0, "7203": 3400.0})
+    e.on_clock(T0)
+    assert [w["excluded"] for w in e.snapshot["watchlist"]] == [True, False]
+    from test_flow import m
+    e.on_board("9432", m(168, 360_000, 168.1, 168), T0)
+    cum = 360_000
+    for i in range(1, 12):
+        cum += 20000
+        e.on_board("9432", m(168.1, cum, 168.1, 168), T0 + timedelta(seconds=5 * i))
+    assert len(sent) == 1                                         # スクイーズも対象外

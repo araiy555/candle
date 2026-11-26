@@ -120,6 +120,8 @@ class PaperEngine:
         self.last_bar = bar.end
         if not bar.complete or bar.start.time() >= self.exit_after or self.in_quiet_open(bar.end):
             return
+        if bar.close < self.settings.min_price:
+            return   # 株価の低い銘柄は対象外（1ティックが相対的に大きく、足の形が崩れやすい）
         window = contiguous_tail(list(h)[-80:])
         self._check_fvg(bar, h)
         self._check_sweep(bar, h)
@@ -291,6 +293,9 @@ class PaperEngine:
         sig = self.flow.update(symbol, msg, now)
         if self.squeeze_log is not None:
             self.squeeze_log.on_tick(symbol, msg, now, *self.flow.last_trade)
+        cheap = (msg.get("CurrentPrice") or 0) < self.settings.min_price
+        if cheap:
+            return
         self._check_walls(symbol, msg, now)
         if (sig is None or not self.flow_notify or now.astimezone(JST).time() >= self.exit_after
                 or self.in_quiet_open(now)):
@@ -486,6 +491,8 @@ class PaperEngine:
             limits=vars(self.risk.limits),
             exposure=sum(t.entry_price * t.qty for t in self.open),
             watchlist=[dict(symbol=s, name=self.names.get(s), price=self.prices.get(s),
+                            excluded=(self.prices.get(s) or 0) < self.settings.min_price
+                            and self.prices.get(s) is not None,
                             vwap=self.vwap(s),
                             range_pct=self.range_pct(s), day_range_pct=self.day_range_pct(s),
                             change_pct=(self.quotes.get(s) or {}).get("ChangePreviousClosePer"))

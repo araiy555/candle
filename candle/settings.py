@@ -24,6 +24,7 @@ class TradeSettings:
     daily_max_loss: float = 10_000   # 1日の最大損失（円）
     max_hold_min: float = 0          # 最大保有時間（分）。0なら時間では決済しない
     quiet_open_min: float = 15       # 寄り付き（9:00）からこの分数は、通知も売買もしない
+    min_price: float = 500           # 株価の下限（円）。これより安い銘柄は通知も売買もしない。0なら除かない
     min_drop_pct: float = 0.3        # 直前の下落率の下限（%）。横ばいの中のサインを除く。0なら除かない
     mkt_fut_drop: float = 0.3        # 地合い: 先物が5分でこの%以上下げたら「警戒」
     mkt_topix_drop: float = 0.15     # 地合い: 加えてTOPIXが5分でこの%以上下げたら「警戒強化」
@@ -54,6 +55,8 @@ class TradeSettings:
             raise ValueError("余力に対する割合は、0より大きく100%以下にしてください")
         if self.per_trade_pct > self.total_pct:
             raise ValueError("1回の割合は、合計の割合以下にしてください")
+        if self.min_price < 0:
+            raise ValueError("株価の下限は0以上にしてください")
         if self.max_hold_min < 0:
             raise ValueError("最大保有時間は0以上にしてください")
         if min(self.per_trade_cap, self.total_cap, self.daily_max_loss) <= 0:

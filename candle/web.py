@@ -68,6 +68,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <div><label for="total_cap">同時に持つ合計の上限（円）</label><div class="row"><input id="total_cap" type="number" step="10000" min="0" style="width:100%"></div></div>
 <div><label for="daily_max_loss">1日の最大損失（円）</label><div class="row"><input id="daily_max_loss" type="number" step="1000" min="0" style="width:100%"></div></div>
 <div><label for="quiet_open_min">寄り付き後に待つ時間（分）　この間は通知も売買もしない</label><div class="row"><input id="quiet_open_min" type="number" step="1" min="0" style="width:100%"></div></div>
+<div><label for="min_price">株価の下限（円）　これより安い銘柄は通知も売買もしない。0＝除かない</label><div class="row"><input id="min_price" type="number" step="50" min="0" style="width:100%"></div></div>
 <div><label for="min_drop_pct">直前の下落率の下限（%）　これ未満の下げは毛抜き底と見なさない。0＝除かない</label><div class="row"><input id="min_drop_pct" type="number" step="0.05" min="0" style="width:100%"></div></div>
 <div><label for="mkt_fut_drop">地合い：先物が5分でこの%以上下げたら「警戒」</label><div class="row"><input id="mkt_fut_drop" type="number" step="0.05" min="0" style="width:100%"></div></div>
 <div><label for="mkt_topix_drop">地合い：TOPIXも5分でこの%以上下げたら「警戒強化」</label><div class="row"><input id="mkt_topix_drop" type="number" step="0.05" min="0" style="width:100%"></div></div>
@@ -103,7 +104,7 @@ function table(el,heads,rows,empty){
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
 let halted=false,state=null,cur=null,formLoaded=false;const closing=new Set();
-const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth'];
+const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_price','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth'];
 function vdiff(price,vwap){if(price==null||!vwap)return '<span class="mut">-</span>';const d=(price-vwap)/vwap*100;return `<span class="${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${n(d,2)}%</span>`}
 function vcell(price,vwap){return vwap?`${n(vwap,1)} <span style="font-size:12px">(${vdiff(price,vwap)})</span>`:'<span class="mut">-</span>'}
 const rng=v=>v==null?'<span class="mut">-</span>':n(v,2)+'%';
@@ -161,7 +162,7 @@ async function load(){
   table('history',['戦略','銘柄','株数','買い','買値','決済','売値','理由','損益(円)','R','平均値幅率','損切り幅÷値幅'],
     d.history.map(t=>[esc(t.strategy),esc(t.symbol),n(t.qty),md(t.entry_time),n(t.entry_price,1),md(t.exit_time),n(t.exit_price,1),
       esc(t.reason),yen(t.pnl),rr(t.r),rng(t.range_pct),t.range_pct?n(t.stop_pct/t.range_pct,1)+'倍':'<span class="mut">-</span>']),'決済済みの取引はありません');
-  $('watch').innerHTML=d.watchlist.map(w=>`<button class="w" data-sym="${esc(w.symbol)}"><span>${esc(w.symbol)} <span class="mut">${esc(w.name||'')}</span></span><span style="text-align:right">${n(w.price,1)}<br><span style="font-size:11px" class="mut">VWAP比 ${vdiff(w.price,w.vwap)}　値幅 ${rng(w.range_pct)}</span></span></button>`).join('')||'<div class="empty">未登録</div>';
+  $('watch').innerHTML=d.watchlist.map(w=>`<button class="w" data-sym="${esc(w.symbol)}"${w.excluded?' style="opacity:.45" title="株価が下限より安いため対象外"':''}><span>${w.excluded?'<span class="mut">対象外 </span>':''}${esc(w.symbol)} <span class="mut">${esc(w.name||'')}</span></span><span style="text-align:right">${n(w.price,1)}<br><span style="font-size:11px" class="mut">VWAP比 ${vdiff(w.price,w.vwap)}　値幅 ${rng(w.range_pct)}</span></span></button>`).join('')||'<div class="empty">未登録</div>';
 }
 $('btn').onclick=async()=>{
   if(!halted&&!confirm('新規の買いを停止します。保有中のポジションの損切り・決済は継続します。'))return;
