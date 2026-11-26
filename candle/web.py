@@ -50,7 +50,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 </style></head><body>
 <header><h1>candle</h1><span class="pill" id="mode"></span><span class="seg" id="modes" hidden><button data-mode="watch">通知のみ</button><button data-mode="paper">テスト</button><button data-mode="live">本番</button></span><span class="pill" id="feed"></span>
 <span class="pill" id="halt"></span><span class="mut" id="time"></span>
-<a href="/squeeze" style="color:var(--acc);font-size:13px">検知履歴（スクイーズ・売り板）</a>
+<a href="/squeeze" style="color:var(--acc);font-size:13px">検知履歴（スクイーズ・売り板・流動性スイープ）</a>
 <label class="pill" style="cursor:pointer"><input type="checkbox" id="auto" style="vertical-align:-2px"> サインが出たらkabuステーションのチャートを自動で切り替える</label>
 <span style="flex:1"></span><button id="closeall" hidden>全ポジションを決済</button><button id="btn"></button></header>
 <main>
@@ -86,7 +86,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <span style="flex:1"></span><button id="close">閉じる</button></div>
 <div class="kpis" id="qinfo" style="padding:10px 16px 0;gap:18px"></div>
 <div style="padding:6px 16px 0;font-size:12px" class="mut"><span style="display:inline-block;width:22px;border-top:2px solid var(--acc);vertical-align:middle;margin-right:5px"></span>VWAP（受信した値。受信前の時間帯は線がありません）</div>
-<div style="padding:4px 16px 0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px" class="mut"><span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--up);vertical-align:middle;margin-right:5px"></span>直近の上昇の範囲（中央の線より上が割高ゾーン、下が割安ゾーン）</span><span><span style="display:inline-block;width:18px;height:8px;background:var(--warn);opacity:.75;vertical-align:middle;margin-right:5px"></span>上昇中の出来高の分布</span><span><span style="display:inline-block;width:18px;border-top:2px dashed var(--fg);vertical-align:middle;margin-right:5px"></span>上昇中のPOC</span><span><span style="display:inline-block;width:18px;height:8px;border:1.5px solid var(--warn);vertical-align:middle;margin-right:5px"></span>FVG</span><span><span style="display:inline-block;width:18px;border-top:2px solid #d4a700;vertical-align:middle;margin-right:5px"></span>上昇前のレンジのPOC</span></div>
+<div style="padding:4px 16px 0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px" class="mut"><span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--up);vertical-align:middle;margin-right:5px"></span>直近の上昇の範囲（中央の線より上が割高ゾーン、下が割安ゾーン）</span><span><span style="display:inline-block;width:18px;height:8px;background:var(--warn);opacity:.75;vertical-align:middle;margin-right:5px"></span>上昇中の出来高の分布</span><span><span style="display:inline-block;width:18px;border-top:2px dashed var(--fg);vertical-align:middle;margin-right:5px"></span>上昇中のPOC</span><span><span style="display:inline-block;width:18px;height:8px;border:1.5px solid var(--warn);vertical-align:middle;margin-right:5px"></span>FVG</span><span><span style="display:inline-block;width:18px;border-top:2px solid #d4a700;vertical-align:middle;margin-right:5px"></span>上昇前のレンジのPOC</span><span><span style="display:inline-block;width:18px;height:8px;border:1px dashed var(--warn);background:var(--warn);opacity:.4;vertical-align:middle;margin-right:5px"></span>流動性プール（割られていない押し安値。下に損切りがたまりやすい）</span></div>
 <div class="chart"><svg id="svg" role="img"></svg><div class="tip" id="tip"></div></div>
 <div class="note" id="note"></div></dialog>
 <script>
@@ -202,6 +202,10 @@ function draw(data){
       if(st.leg_poc!=null){svg.appendChild(el('line',{x1:xl,x2:xr,y1:y(st.leg_poc),y2:y(st.leg_poc),stroke:'var(--fg)','stroke-width':1.5,'stroke-dasharray':'7 5'}))}
       if(st.range_poc!=null&&st.range_poc>lo&&st.range_poc<hi){svg.appendChild(el('line',{x1:L,x2:right,y1:y(st.range_poc),y2:y(st.range_poc),stroke:'#d4a700','stroke-width':1.5}));
         svg.appendChild(el('text',{x:L+4,y:y(st.range_poc)+14,fill:'var(--fg)','font-size':11,stroke:'var(--card)','stroke-width':4,'paint-order':'stroke'},'上昇前のレンジのPOC '+fmt(st.range_poc)))}}}
+  // 流動性プール（まだ割られていない押し安値。この下に損切りがたまりやすい）
+  for(const pl of (data.pools||[]).slice(-4)){const pi=bars.findIndex(b=>b.t===pl.t);if(pi<0||pl.level<=lo||pl.level>=hi)continue;const py=y(pl.level);
+    svg.appendChild(el('rect',{x:x(pi)-bw/2,y:py,width:(W-R)-(x(pi)-bw/2),height:Math.max(4,y(pl.level*(1-0.0015))-py),fill:'var(--warn)','fill-opacity':.14,stroke:'var(--warn)','stroke-width':1,'stroke-dasharray':'3 3'}));
+    svg.appendChild(el('text',{x:(W-R)-4,y:py+12,'text-anchor':'end',fill:'var(--warn)','font-size':11,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},'流動性プール '+fmt(pl.level)))}
   const w=Math.max(1,Math.min(14,bw*0.7));
   // 出来高（株価とは別の枠。縦軸は共有しない）
   const vTop=H-26-VH,vBot=H-26,vmax=Math.max(...bars.map(b=>b.v),1),vy=v=>vBot-(v/vmax)*VH;
@@ -304,7 +308,7 @@ def start_web(target, port: int = 8765, data_dir=None, db_path=None) -> Threadin
                 ok = lambda v: v is None or (len(v) == 10 and v.replace("-", "").isdigit())
                 if not (ok(day("from")) and ok(day("to"))):
                     return self._send(b"bad date", "text/plain", 400)
-                kind = day("kind") if day("kind") in ("squeeze", "wall") else "squeeze"
+                kind = day("kind") if day("kind") in ("squeeze", "wall", "sweep") else "squeeze"
                 outcome = day("outcome") if day("outcome") in ("break", "pulled", "rejected") else None
                 res = squeeze_web.list_events(db_path, day("from"), day("to"), kind, outcome)
                 self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"), "application/json")

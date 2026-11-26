@@ -11,11 +11,11 @@ from collections import defaultdict, deque
 from datetime import datetime, time
 
 from .bars import JST, SESSIONS, Bar
-from . import fvg
+from . import fvg, sweep
 from .flow import FlowDetector, FlowParams
 from .market import MarketMonitor
-from .patterns import (FLOW_STRATEGY, FVG_STRATEGIES, STRATEGIES, STRATEGY_BY_ID, WALL_STRATEGIES,
-                       Params, contiguous_tail, decline)
+from .patterns import (FLOW_STRATEGY, FVG_STRATEGIES, STRATEGIES, STRATEGY_BY_ID, SWEEP_STRATEGY,
+                       WALL_STRATEGIES, Params, contiguous_tail, decline)
 from .wall import WallTracker
 from .risk import RiskManager
 from .settings import TradeSettings
@@ -57,7 +57,11 @@ class PaperEngine:
         wanted = ids | (notify_ids or set())
         # 大口の売り板の観察（約定の向きと出来高の差分が要るので、スクイーズの検出器と一緒に動かす）
         self.walls = WallTracker() if wanted & set(WALL_STRATEGIES.values()) else None
-        want_flow = FLOW_STRATEGY in wanted or self.walls is not None
+        self.sweep_on = SWEEP_STRATEGY in wanted
+        self.sweep_params = sweep.SweepParams()
+        self.sweep_seen: set[tuple[str, str]] = set()      # (銘柄, 押し安値の時刻)。同じプールは1回だけ
+        self.last_msg: dict[str, dict] = {}                # 銘柄ごとの最新の配信（記録に板などを残すため）
+        want_flow = FLOW_STRATEGY in wanted or self.walls is not None or self.sweep_on
         self.flow_notify = FLOW_STRATEGY in wanted   # スクイーズそのものを通知・記録するか
         self.flow = FlowDetector(flow_params) if want_flow else None
         self.flow_trades = FLOW_STRATEGY in ids      # スクイーズで売買もするか（通知だけなら False）
@@ -118,6 +122,7 @@ class PaperEngine:
             return
         window = contiguous_tail(list(h)[-80:])
         self._check_fvg(bar, h)
+        self._check_sweep(bar, h)
         params = replace(self.params, min_drop=self.settings.min_drop_pct / 100)
         drop = decline(window, 2, params)
         drop_pct = None if drop is None else round(drop * 100, 3)
@@ -188,6 +193,31 @@ class PaperEngine:
             self.store.add_signal(self.mode, sid, symbol, ev.time, ev.price, ev.wall.price, "通知のみ",
                                   ev.note, self.vwap(symbol))
 
+    def _check_sweep(self, bar: Bar, history) -> None:
+        """足の確定ごとに、流動性スイープ（押し安値を割って反転）を判定して通知・記録する。"""
+        if not self.sweep_on:
+            return
+        sig = sweep.detect(contiguous_tail(list(history)[-200:]), self.sweep_params)
+        if sig is None:
+            return
+        key = (bar.symbol, sig.level_time.isoformat())
+        if key in self.sweep_seen or (SWEEP_STRATEGY, bar.symbol, bar.end.isoformat()) in self.seen:
+            return
+        self.sweep_seen.add(key)
+        self.seen.add((SWEEP_STRATEGY, bar.symbol, bar.end.isoformat()))
+        name = STRATEGY_BY_ID[SWEEP_STRATEGY].name
+        log.info("サイン %s %s %s", name, bar.symbol, sig.note)
+        if self.squeeze_log is not None:
+            self.squeeze_log.on_signal(sig, self.last_msg.get(bar.symbol, {}), self.names.get(bar.symbol),
+                                       kind="sweep")
+        if self.notify and (self.notify_ids is None or SWEEP_STRATEGY in self.notify_ids):
+            label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
+            self.notify(f"{name}  {label}", f"{bar.end:%H:%M} {sig.note}", bar.symbol)
+        if self.auto_chart and self.on_auto_chart:
+            self.on_auto_chart(bar.symbol)
+        self.store.add_signal(self.mode, SWEEP_STRATEGY, bar.symbol, bar.end, bar.close, sig.low,
+                              "通知のみ", sig.note, self.vwap(bar.symbol))
+
     def _check_fvg(self, bar: Bar, history) -> None:
         """足の確定ごとに、FVGの反発・割れを判定して通知する（売買はしない）。"""
         if not self.fvg_kinds:
@@ -238,6 +268,7 @@ class PaperEngine:
     def on_board(self, symbol: str, msg: dict, now: datetime) -> None:
         """配信1件ごとに呼ばれる。板と約定の流れからスクイーズを判定する。"""
         self.quotes[symbol] = {k: msg.get(k) for k in QUOTE_FIELDS}
+        self.last_msg[symbol] = msg
         if self.flow is None or self.market.is_market_symbol(symbol):
             return
         sig = self.flow.update(symbol, msg, now)
@@ -389,6 +420,9 @@ class PaperEngine:
                     minutes=bars[0].minutes if bars else None,
                     quote=self.quotes.get(symbol),
                     structure=fvg.structure(contiguous_tail(bars[-200:]), self.fvg_params) if bars else None,
+                    pools=[dict(t=tail[i].start.isoformat(), level=lv)
+                           for tail in [contiguous_tail(bars[-200:])]
+                           for i, lv in sweep.pools(tail, self.sweep_params)] if bars else [],
                     bars=[dict(t=b.start.isoformat(), o=b.open, h=b.high, l=b.low, c=b.close,
                                v=b.volume, ok=b.complete, vwap=b.vwap) for b in bars])
 

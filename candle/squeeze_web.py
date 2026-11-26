@@ -177,7 +177,7 @@ button{cursor:pointer}.kpis{display:flex;flex-wrap:wrap;gap:22px}.kpis>div>span{
 <header><h1>検知履歴</h1><a href="/">← 管理画面へ戻る</a><span style="flex:1"></span>
 <span class="mut" style="font-size:12px"><span class="tag">取得</span> 受信した値　<span class="tag c">計算</span> 受信値から計算した値　<span class="miss">欠損</span> 受信できなかった値</span></header>
 <main id="listView">
-<section><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label for="kind">種類</label><select id="kind"><option value="squeeze">スクイーズ（板と約定の流れ）</option><option value="wall">大口の売り板</option></select><label for="outcome" id="outl" hidden>結果</label><select id="outcome" hidden><option value="">すべて</option><option value="break">吸収して突破</option><option value="pulled">取消で消えた</option><option value="rejected">跳ね返された</option></select><label for="day">期間</label><select id="day"></select><button id="reload">更新</button><span class="mut" id="count"></span></div></section>
+<section><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label for="kind">種類</label><select id="kind"><option value="squeeze">スクイーズ（板と約定の流れ）</option><option value="wall">大口の売り板</option><option value="sweep">流動性スイープ</option></select><label for="outcome" id="outl" hidden>結果</label><select id="outcome" hidden><option value="">すべて</option><option value="break">吸収して突破</option><option value="pulled">取消で消えた</option><option value="rejected">跳ね返された</option></select><label for="day">期間</label><select id="day"></select><button id="reload">更新</button><span class="mut" id="count"></span></div></section>
 <section><h2>集計</h2><div id="agg"></div></section>
 <section><h2>検知一覧（新しい順）</h2><div id="list"></div><div class="note" id="listnote"></div></section>
 </main>
@@ -221,6 +221,12 @@ async function loadList(){
     `<div class="note">横ばいは騰落率が±${a.flat_threshold}%以内。欠損した検知は割合と平均の計算から除いています。追跡が5分完了した ${a.complete}件の平均：最大上昇 ${a.avg_max_up==null?'-':pct(a.avg_max_up)}、最大下落 ${a.avg_max_down==null?'-':pct(a.avg_max_down)}</div>`+
     '<h3>検知した時間帯別の平均騰落率 '+C+'</h3>'+table([{t:'時間帯',l:1},'件数',...H.map(lab)],
     a.by_hour.map(r=>({cells:[{l:1,v:r.hour+'時台'},r.n,...H.map(h=>r[h].avg==null?'<span class="mut">-</span>':pct(r[h].avg)+` <span class="mut">(${r[h].n})</span>`)]})));
+  if(kind==='sweep'){$('list').innerHTML=table([{t:'日時',l:1},{t:'銘柄',l:1},'回復後の株価','押し安値（プール）','割り込んだ安値','割り込み幅','出来高比','回復まで',...H.map(lab),'最大上昇','最大下落',{t:'状態',l:1}],
+      d.events.map(e=>{const q=e.acquired,c=e.computed,m=e.metrics;return {attr:` class="row" data-id="${e.id}"`,cells:[{l:1,v:dt(q.time)},{l:1,v:`<a href="#${e.id}">${esc(q.symbol)} ${esc(q.name||'')}</a>`},
+        num(q.price,1),num(m.level,1),num(m.sweep_low,1),m.depth_pct==null?MISS:'-'+n(m.depth_pct,2)+'%',m.volume_ratio==null?MISS:n(m.volume_ratio,1)+'倍',m.reclaim_bars==null?MISS:m.reclaim_bars+'本',...H.map(h=>hcell(e.horizons[h])),
+        e.status==='tracking'?'<span class="mut">記録中</span>':pct(c.max_up),e.status==='tracking'?'<span class="mut">記録中</span>':pct(c.max_down),
+        {l:1,v:e.status==='done'?'完了':e.status==='tracking'?'<span class="mut">記録中</span>':`<span class="miss" title="${esc(e.gap_reason||'')}">途中まで（${n(q.tracked_seconds,0)}秒）</span>`}]}}));
+    $('listnote').textContent='騰落率は、押し安値の上に戻した足の終値からの変化です。割り込み幅・出来高比は計算した値です。行をクリックすると詳細を開きます。';return}
   if(wall){const o=d.outcomes||{};$('count').textContent+=`　内訳：吸収して突破 ${o.break||0}／取消で消えた ${o.pulled||0}／跳ね返された ${o.rejected||0}`;
     $('list').innerHTML=table([{t:'日時',l:1},{t:'銘柄',l:1},{t:'結果',l:1},'売り板の価格','最大数量','金額','約定で減少','取消で減少','補充',...H.map(lab),'最大上昇','最大下落',{t:'状態',l:1}],
       d.events.map(e=>{const q=e.acquired,c=e.computed,m=e.metrics;return {attr:` class="row" data-id="${e.id}"`,cells:[{l:1,v:dt(q.time)},{l:1,v:`<a href="#${e.id}">${esc(q.symbol)} ${esc(q.name||'')}</a>`},
@@ -275,14 +281,17 @@ async function loadDetail(id){
   if(e.pre_coverage<e.window.pre-5)warn.push(`検知前のデータは ${n(e.pre_coverage,0)}秒分しか残っていません（起動直後や受信開始直後のため）。`);
   $('dwarn').hidden=!warn.length;$('dwarn').innerHTML=warn.map(w=>`<div class="miss">${w}</div>`).join('');
   const wall=e.kind==='wall',m=e.metrics;
-  if(wall){$('dkpis').innerHTML=[['結果 '+C,esc(m.outcome_label||'')],['その時点の株価 '+G,num(q.price,1,'円')],['売り板の価格 '+G,num(m.wall_price,1,'円')],['最大数量 '+G,num(m.max_qty,0,'株')],['金額 '+C,m.wall_value==null?MISS:n(m.wall_value/1e8,2)+'億円'],
+  if(e.kind==='sweep'){$('dkpis').innerHTML=[['回復後の株価 '+G,num(q.price,1,'円')],['前日比 '+G,q.change==null?MISS:`${q.change>0?'+':''}${n(q.change,1)}円（${pct(q.change_pct)}）`],['押し安値（流動性プール） '+C,num(m.level,1,'円')],['割り込んだ安値 '+C,num(m.sweep_low,1,'円')],['割り込み幅 '+C,m.depth_pct==null?MISS:n(m.depth_pct,2)+'%'],
+      ['出来高比 '+C,m.volume_ratio==null?MISS:n(m.volume_ratio,1)+'倍'],['割り込んだ足の出来高 '+C,num(m.sweep_volume,0,'株')],['プールができてから '+C,num(m.bars_since_pool,0,'本')]]
+      .map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('')}
+  else if(wall){$('dkpis').innerHTML=[['結果 '+C,esc(m.outcome_label||'')],['その時点の株価 '+G,num(q.price,1,'円')],['売り板の価格 '+G,num(m.wall_price,1,'円')],['最大数量 '+G,num(m.max_qty,0,'株')],['金額 '+C,m.wall_value==null?MISS:n(m.wall_value/1e8,2)+'億円'],
       ['約定で減少 '+C,num(m.executed,0,'株')+`（${n(m.executed_share*100,0)}%）`],['取消で減少 '+C,num(m.cancelled,0,'株')],['補充 '+C,num(m.added,0,'株')],['板に出ていた時間 '+C,num(m.seconds,0,'秒')]]
       .map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('')}
   else $('dkpis').innerHTML=[['検知時株価 '+G,num(q.price,1,'円')],['前日比 '+G,q.change==null?MISS:`${q.change>0?'+':''}${n(q.change,1)}円（${pct(q.change_pct)}）`],['前日終値 '+G,num(q.prev_close,1,'円')],['当日出来高 '+G,num(q.volume,0,'株')],
     ['出来高比率 '+C,c.surge==null?MISS:n(c.surge,1)+'倍'],['売り板吸収スコア '+C,c.absorb_score==null?MISS:n(c.absorb_score,1)+'倍'],['買い約定の連続 '+C,c.run==null?MISS:c.run+'回'],['買い約定の比率 '+C,c.buy_ratio==null?MISS:n(c.buy_ratio*100,0)+'%'],['売り約定の比率 '+C,c.sell_share==null?MISS:n(c.sell_share*100,0)+'%']]
     .map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('');
   $('dconds').innerHTML=table([{t:'条件',l:1},{t:'成否',l:1},{t:'具体的な理由（検知時点の数値）',l:1}],e.conditions.map(x=>({cells:[{l:1,v:esc(x.label)},{l:1,v:x.ok?'<b class="ok">成立</b>':'<span class="ng">不成立</span>'},{w:1,v:esc(x.text)}]})))+
-    (wall?'<div class="note">板の数量が減った理由（約定か取消か）は、その間の出来高からの推定です。見えているのは板の上から10本だけで、表示されない注文は分かりません。</div>':'')+(wall?'':`<div class="note">3つのうち2つ以上が成立し、出来高が通常の2倍以上のときに検知します。直近${n(e.metrics.window,0)}秒の約定 ${n(e.metrics.trades)}回・${n(e.metrics.volume)}株（通常ペースでの見込み ${n(e.metrics.expected_volume)}株）。約定の向きは、配信からの推定です。</div>`);
+    (wall?'<div class="note">板の数量が減った理由（約定か取消か）は、その間の出来高からの推定です。見えているのは板の上から10本だけで、表示されない注文は分かりません。</div>':'')+(wall||e.kind==='sweep'?'':`<div class="note">3つのうち2つ以上が成立し、出来高が通常の2倍以上のときに検知します。直近${n(e.metrics.window,0)}秒の約定 ${n(e.metrics.trades)}回・${n(e.metrics.volume)}株（通常ペースでの見込み ${n(e.metrics.expected_volume)}株）。約定の向きは、配信からの推定です。</div>`);
   const mx=e.status==='tracking'?'<span class="mut">記録中</span>':`${pct(c.max_up)}（${num(q.max_price,1,'円')}）`,mn=e.status==='tracking'?'<span class="mut">記録中</span>':`${pct(c.max_down)}（${num(q.min_price,1,'円')}）`;
   $('dhor').innerHTML=table([{t:'経過',l:1},'株価 '+G,'騰落率 '+C,{t:'備考',l:1}],H.map(h=>{const v=e.horizons[h];return {cells:[{l:1,v:lab(h)},v.price!=null?n(v.price,1)+'円':v.pending?'<span class="mut">記録中</span>':MISS,v.price!=null?pct(v.ret):v.pending?'':MISS,
       {l:1,v:v.missing?`<span class="miss">${esc(v.missing)}</span>`:v.price!=null&&v.age>0?`<span class="mut">その時点で最後の約定は ${n(v.age,0)}秒前</span>`:''}]}}))+

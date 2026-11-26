@@ -204,7 +204,10 @@ STRATEGIES: tuple[Strategy, ...] = (
     # 大口の売り板（wall.py が判定する）。通知のみ。
     Strategy("wall_break", "売り板突破", lambda bars, p: None),
     Strategy("wall_approach", "売り板接近", lambda bars, p: None),
+    # 流動性スイープ（sweep.py が判定する）。通知のみ。
+    Strategy("liq_sweep", "流動性スイープ", lambda bars, p: None),
 )
+SWEEP_STRATEGY = "liq_sweep"
 WALL_STRATEGIES = {"break": "wall_break", "approach": "wall_approach"}
 FLOW_STRATEGY = "squeeze"
 FVG_STRATEGIES = {"hold": "fvg_hold", "break": "fvg_break"}
