@@ -12,6 +12,7 @@ from datetime import datetime, time
 
 from .bars import JST, SESSIONS, Bar
 from .flow import FlowDetector, FlowParams
+from .market import MarketMonitor
 from .patterns import (FLOW_STRATEGY, STRATEGIES, STRATEGY_BY_ID, Params, contiguous_tail,
                        decline)
 from .risk import RiskManager
@@ -35,7 +36,7 @@ class PaperEngine:
                  enabled: set[str] | None = None, trade_enabled: bool = True,
                  notify=None, notify_ids: set[str] | None = None,
                  settings: TradeSettings | None = None, flow_params: FlowParams | None = None,
-                 squeeze_log=None, tape_fetcher=None):
+                 squeeze_log=None, tape_fetcher=None, market: MarketMonitor | None = None):
         self.store, self.risk = store, risk
         self.settings = settings or TradeSettings(
             per_trade_cap=risk.limits.per_symbol_cap, total_cap=risk.limits.total_cap,
@@ -59,6 +60,7 @@ class PaperEngine:
         self.notes: dict[tuple[str, str, str], str] = {}
         self.drops: dict[tuple[str, str, str], float | None] = {}
         self.quotes: dict[str, dict] = {}    # 銘柄ごとの最新の受信値（VWAP・前日比・高安など。表示用）
+        self.market = market if market is not None else MarketMonitor()   # 地合いの監視
         self.history: dict[str, deque[Bar]] = defaultdict(lambda: deque(maxlen=400))  # 1分足でも当日分が収まる
         self.prices: dict[str, float] = {}
         self.watchlist: list[str] = []
@@ -92,6 +94,8 @@ class PaperEngine:
 
     # --- 入力 ---------------------------------------------------------------
     def on_bar(self, bar: Bar) -> None:
+        if self.market.is_market_symbol(bar.symbol):
+            return   # 先物・TOPIXは地合いの判定にだけ使う（売買や通知の対象にしない）
         h = self.history[bar.symbol]
         if h and h[-1].start.date() != bar.start.date():
             h.clear()
@@ -136,6 +140,13 @@ class PaperEngine:
         v = (self.quotes.get(symbol) or {}).get("VWAP")
         return float(v) if v else None
 
+    def market_state(self, now: datetime) -> dict:
+        """地合いの状態。設定の基準を反映して判定する。"""
+        st, p = self.settings, self.market.p
+        p.fut_drop, p.topix_drop = st.mkt_fut_drop, st.mkt_topix_drop
+        p.breadth = st.mkt_breadth if st.mkt_breadth > 0 else 101.0   # 0 は「止めない」
+        return self.market.state(now.astimezone(JST), self.watchlist)
+
     def set_feed(self, ok: bool) -> None:
         """API接続の状態が変わった。切断中は新規の買いを止め、追跡中の検知は欠損として扱う。"""
         self.risk.feed_ok = ok
@@ -145,7 +156,7 @@ class PaperEngine:
     def on_board(self, symbol: str, msg: dict, now: datetime) -> None:
         """配信1件ごとに呼ばれる。板と約定の流れからスクイーズを判定する。"""
         self.quotes[symbol] = {k: msg.get(k) for k in QUOTE_FIELDS}
-        if self.flow is None:
+        if self.flow is None or self.market.is_market_symbol(symbol):
             return
         sig = self.flow.update(symbol, msg, now)
         if self.squeeze_log is not None:
@@ -173,8 +184,10 @@ class PaperEngine:
                                   "通知のみ", sig.note, self.vwap(symbol))
 
     def on_price(self, symbol: str, price: float, ts: datetime) -> None:
-        self.prices[symbol] = price
         self.last_tick = datetime.now(JST)
+        if self.market.on_price(symbol, price, ts.astimezone(JST)):
+            return   # 先物・TOPIX
+        self.prices[symbol] = price
         if self.day != ts.date():
             self.day = ts.date()
             self.risk.new_day()
@@ -243,6 +256,8 @@ class PaperEngine:
         """新規買いの可否と数量。"""
         if ts.time() >= self.exit_after:
             return 0, "時間外"
+        if self.market_state(ts)["halt"]:
+            return 0, "地合い悪化で新規停止中"
         unreal = sum(t.pnl(self.prices.get(t.symbol, t.entry_price)) for t in self.open)
         return self.risk.check_entry(strategy_id, symbol, entry, stop, self.open, unreal)
 
@@ -323,7 +338,8 @@ class PaperEngine:
             time=now.isoformat(), mode=self.mode_label if self.trade_enabled else "通知のみ",
             live=self.mode == "live", trading=self.trade_enabled,
             settings=vars(self.settings), warnings=list(self.warnings.values()),
-            health=self.health(now), halted=self.risk.halted,
+            health=self.health(now),
+            market=self.market_state(now), halted=self.risk.halted,
             feed_ok=self.risk.feed_ok, auto_chart=self.auto_chart, realized_today=self.risk.realized_today,
             limits=vars(self.risk.limits),
             exposure=sum(t.entry_price * t.qty for t in self.open),

@@ -62,6 +62,15 @@ class KabuClient:
         body = {"Symbols": [{"Symbol": s, "Exchange": exchange} for s in symbols]}
         return self._request("PUT", "/register", json=body).get("RegistList", [])
 
+    def register_items(self, items: list[dict]) -> list[dict]:
+        """市場コードを個別に指定して登録する（先物・指数用）。"""
+        return self._request("PUT", "/register", json={"Symbols": items}).get("RegistList", [])
+
+    def future_symbol(self, future_code: str = "NK225", deriv_month: int = 0) -> dict:
+        """先物の銘柄コードを取得する（deriv_month=0 は直近限月）。"""
+        return self._request("GET", "/symbolname/future",
+                             params={"FutureCode": future_code, "DerivMonth": deriv_month})
+
     def unregister_all(self) -> None:
         self._request("PUT", "/unregister/all")
 

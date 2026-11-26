@@ -55,6 +55,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <span style="flex:1"></span><button id="closeall" hidden>全ポジションを決済</button><button id="btn"></button></header>
 <main>
 <section id="health" style="padding:8px 12px;font-size:13px"></section>
+<section id="market"></section>
 <section id="warn" hidden><h2>確認が必要です</h2><ul id="warnlist" style="margin:0;padding-left:20px"></ul></section>
 <section data-trade><div class="kpis" id="kpis"></div></section>
 <section><h2>設定</h2><div class="form">
@@ -65,6 +66,9 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <div><label for="daily_max_loss">1日の最大損失（円）</label><div class="row"><input id="daily_max_loss" type="number" step="1000" min="0" style="width:100%"></div></div>
 <div><label for="quiet_open_min">寄り付き後に待つ時間（分）　この間は通知も売買もしない</label><div class="row"><input id="quiet_open_min" type="number" step="1" min="0" style="width:100%"></div></div>
 <div><label for="min_drop_pct">直前の下落率の下限（%）　これ未満の下げは毛抜き底と見なさない。0＝除かない</label><div class="row"><input id="min_drop_pct" type="number" step="0.05" min="0" style="width:100%"></div></div>
+<div><label for="mkt_fut_drop">地合い：先物が5分でこの%以上下げたら「警戒」</label><div class="row"><input id="mkt_fut_drop" type="number" step="0.05" min="0" style="width:100%"></div></div>
+<div><label for="mkt_topix_drop">地合い：TOPIXも5分でこの%以上下げたら「警戒強化」</label><div class="row"><input id="mkt_topix_drop" type="number" step="0.05" min="0" style="width:100%"></div></div>
+<div><label for="mkt_breadth">地合い：監視銘柄のこの%以上が下落で新規買い停止　0＝止めない</label><div class="row"><input id="mkt_breadth" type="number" step="5" min="0" max="100" style="width:100%"></div></div>
 <div><label for="max_hold_min">最大保有時間（分）　0＝時間では決済しない</label><div class="row"><input id="max_hold_min" type="number" step="1" min="0" style="width:100%"></div></div>
 <div><div class="row" style="align-items:center"><button id="save">設定を保存</button><span class="mut" id="savemsg" style="font-size:12px"></span></div></div>
 </div><div id="example" style="margin-top:12px;font-size:13px"></div><div class="note" style="padding:10px 0 0">損切り・トレーリング・金額の上限は、テストと本番の売買に使います（次の買いから適用。保有中の分は買った時点の設定のまま）。寄り付き後に待つ時間は、通知のみのモードでも効きます。</div></section>
@@ -95,7 +99,7 @@ function table(el,heads,rows,empty){
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
 let halted=false,state=null,cur=null,formLoaded=false;const closing=new Set();
-const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_drop_pct'];
+const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth'];
 function vdiff(price,vwap){if(price==null||!vwap)return '<span class="mut">-</span>';const d=(price-vwap)/vwap*100;return `<span class="${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${n(d,2)}%</span>`}
 function vcell(price,vwap){return vwap?`${n(vwap,1)} <span style="font-size:12px">(${vdiff(price,vwap)})</span>`:'<span class="mut">-</span>'}
 function nextRaise(p){if(p.next_raise)return `${n(p.next_raise[0],1)} で ${n(p.next_raise[1],1)} へ`;
@@ -122,6 +126,13 @@ async function load(){
   const h=d.health;if(h){const stale=h.market_open&&(h.tick_age==null||h.tick_age>30);
     $('health').innerHTML=(stale?'<b class="ng">株価を受信できていません</b>　':h.market_open?'<b class="ok">動作中</b>　':'<b class="mut">取引時間外</b>　')+
       `最後の受信 ${h.last_tick?hm(h.last_tick):'なし'}　／　最後に確定した足 ${h.last_bar?hm(h.last_bar):'なし'}　／　本日の足 ${n(h.bars_today)}本　／　判定できる銘柄 ${h.ready} / ${h.watching}　／　本日のサイン ${h.signals_today}件`}
+  const mk=d.market;if(mk){const cls={normal:'ok',caution:'warn',strong:'warn',halt:'ng'}[mk.level];
+    const ix=(v,name,lim)=>`<div><span>${esc(v.label||name)}（${n(mk.window_min,0)}分前から）</span><b>${v.available?`<span class="${v.change>0?'pos':v.change<0?'neg':''}">${v.change>0?'+':''}${n(v.change,2)}%</span>`:'<span class="mut" style="font-size:13px">取得できていません</span>'}</b><span>${v.available?(v.falling?`<span class="warn">基準（-${lim}%）以上の下げ</span>`:`基準 -${lim}%`):esc(v.reason||'')}</span></div>`;
+    const b=mk.breadth;
+    $('market').innerHTML=`<h2>地合い　<span class="${cls}" style="font-size:15px">${esc(mk.label)}</span>${mk.held?' <span class="mut" style="font-weight:400;font-size:12px">（条件は外れましたが、5分間は停止を続けます）</span>':''}</h2><div class="kpis">`+
+      ix(mk.fut,'日経225先物',mk.thresholds.fut_drop)+ix(mk.topix,'TOPIX',mk.thresholds.topix_drop)+
+      `<div><span>下落している監視銘柄（${n(mk.window_min,0)}分前より安い）</span><b>${b.available?`<span class="${b.falling?'ng':''}">${n(b.pct,0)}%</span> <span class="mut" style="font-size:13px">（${b.down} / ${b.total}銘柄）</span>`:'<span class="mut" style="font-size:13px">判定できません</span>'}</b><span>${b.available?(mk.thresholds.breadth>100?'停止の基準なし':`基準 ${n(mk.thresholds.breadth,0)}%以上で新規買い停止`):esc(b.reason||'')}</span></div></div>`+
+      '<div class="note" style="padding:8px 0 0">先物が急落＝警戒、加えてTOPIXも下落＝警戒強化、監視銘柄の下落が基準以上＝新規買い停止。買いを止めるのは「新規買い停止」のときだけです。保有中の損切り・決済は通常どおり行います。</div>'}
   $('warn').hidden=!(d.warnings&&d.warnings.length);$('warnlist').innerHTML=(d.warnings||[]).map(w=>`<li>${esc(w)}</li>`).join('');
   if(!formLoaded&&d.settings){for(const k of FIELDS)$(k).value=d.settings[k];formLoaded=true;syncForm()}
   $('mode').textContent=d.mode;$('time').textContent=md(d.time)+' 更新';

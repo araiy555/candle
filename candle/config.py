@@ -31,6 +31,9 @@ class Config:
     webhook_url: str = ""
     notify_copy_code: bool = True
     live: LiveConfig = field(default_factory=LiveConfig)
+    market_future: str = "NK225"     # 地合いの判定に使う先物（空なら使わない）
+    market_future_exchange: int = 2  # 2=日通し, 23=日中
+    market_topix: str = "151"        # TOPIXの銘柄コード（空なら使わない）
     trade_strategies: list[str] = field(default_factory=lambda: ["tweezer_bottom"])
 
     @property
@@ -85,6 +88,9 @@ def load_config(path: str | Path | None = None) -> Config:
         webhook_url=str(raw.get("notify", {}).get("webhook_url", "")),
         notify_copy_code=bool(raw.get("notify", {}).get("copy_code", True)),
         live=LiveConfig(**raw.get("live", {})),
+        market_future=str(raw.get("market", {}).get("future", "NK225")),
+        market_future_exchange=int(raw.get("market", {}).get("future_exchange", 2)),
+        market_topix=str(raw.get("market", {}).get("topix", "151")),
         trade_strategies=list(raw.get("trading", {}).get("strategies", ["tweezer_bottom"])),
     )
     if not 1 <= cfg.universe_size <= 50:

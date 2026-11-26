@@ -117,6 +117,31 @@ def replay(lines: Iterable[str], store: Store, minutes: int = 5) -> Pipeline:
     return pipe
 
 
+def market_sources(cfg: Config, client) -> tuple[list[dict], dict, dict, dict]:
+    """地合いの判定に使う先物・TOPIXの登録内容を用意する。
+
+    戻り値: (登録する項目, 銘柄コード→種類, 種類→表示名, 種類→取得できない理由)
+    """
+    items, symbols, labels, problems = [], {}, {"fut": "日経225先物", "topix": "TOPIX"}, {}
+    if cfg.market_future:
+        try:
+            info = client.future_symbol(cfg.market_future, 0)
+            sym = str(info["Symbol"])
+            items.append({"Symbol": sym, "Exchange": cfg.market_future_exchange})
+            symbols[sym] = "fut"
+            labels["fut"] = info.get("SymbolName") or labels["fut"]
+        except Exception as e:
+            problems["fut"] = f"先物の銘柄コードを取得できませんでした（{e}）"
+    else:
+        problems["fut"] = "設定で使わないことになっています"
+    if cfg.market_topix:
+        items.append({"Symbol": cfg.market_topix, "Exchange": 1})
+        symbols[cfg.market_topix] = "topix"
+    else:
+        problems["topix"] = "設定で使わないことになっています"
+    return items, symbols, labels, problems
+
+
 class _EngineSink:
     """エンジン1つをそのまま使う場合の受け口（コマンドでモードを指定して起動したとき）。"""
 
@@ -157,6 +182,10 @@ class _EngineSink:
 
     def set_client(self, client) -> None:
         pass
+
+    def set_market(self, symbols, labels, problems) -> None:
+        if self.engine:
+            self.engine.market.set_sources(symbols, labels, problems)
 
     def report(self, key: str, message: str | None) -> None:
         """接続や処理の問題を画面に出す（message が None なら解消）。"""
@@ -214,9 +243,30 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
                         sink.login_failed()
                     raise
                 # SQLiteは作成したスレッドでのみ使えるため、ここは同期で呼ぶ（起動時のみ・短時間）
-                symbols = select_universe(cfg, client, store, must=store.open_symbols())
+                # 先物・TOPIX（地合いの判定用）の分だけ、個別株の枠を空ける
+                extras, mkt_symbols, mkt_labels, mkt_problems = await asyncio.to_thread(
+                    market_sources, cfg, client)
+                size = cfg.universe_size
+                cfg.universe_size = max(1, min(size, 50 - len(extras)))
+                try:
+                    symbols = select_universe(cfg, client, store, must=store.open_symbols())
+                finally:
+                    cfg.universe_size = size
                 await asyncio.to_thread(client.unregister_all)
                 await asyncio.to_thread(client.register, symbols)
+                if extras:
+                    try:
+                        done = await asyncio.to_thread(client.register_items, extras)
+                        got = {str(d.get("Symbol")) for d in done}
+                        for sym, key in list(mkt_symbols.items()):
+                            if sym not in got:
+                                mkt_problems[key] = "登録できませんでした（kabuステーションが受け付けませんでした）"
+                                del mkt_symbols[sym]
+                    except Exception as e:
+                        for key in set(mkt_symbols.values()):
+                            mkt_problems[key] = f"登録できませんでした（{e}）"
+                        mkt_symbols = {}
+                sink.set_market(mkt_symbols, mkt_labels, mkt_problems)
                 log.info("監視銘柄 %d 件を登録しました: %s", len(symbols), " ".join(symbols))
                 async with websockets.connect(cfg.ws_url, ping_interval=None,
                                               max_size=None) as ws:

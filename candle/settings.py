@@ -22,6 +22,9 @@ class TradeSettings:
     max_hold_min: float = 0          # 最大保有時間（分）。0なら時間では決済しない
     quiet_open_min: float = 15       # 寄り付き（9:00）からこの分数は、通知も売買もしない
     min_drop_pct: float = 0.3        # 直前の下落率の下限（%）。横ばいの中のサインを除く。0なら除かない
+    mkt_fut_drop: float = 0.3        # 地合い: 先物が5分でこの%以上下げたら「警戒」
+    mkt_topix_drop: float = 0.15     # 地合い: 加えてTOPIXが5分でこの%以上下げたら「警戒強化」
+    mkt_breadth: float = 70          # 地合い: 監視銘柄のこの%以上が5分前より下なら「新規買い停止」。0なら止めない
 
     def validate(self) -> None:
         if self.stop_mode not in STOP_MODES:
@@ -40,6 +43,8 @@ class TradeSettings:
             raise ValueError("寄り付き後に待つ時間は0〜120分にしてください")
         if not 0 <= self.min_drop_pct <= 10:
             raise ValueError("直前の下落率の下限は0〜10%にしてください")
+        if min(self.mkt_fut_drop, self.mkt_topix_drop) <= 0 or not 0 <= self.mkt_breadth <= 100:
+            raise ValueError("地合いの基準は、下落率は0より大きく、割合は0〜100%にしてください")
         if self.max_hold_min < 0:
             raise ValueError("最大保有時間は0以上にしてください")
         if min(self.per_trade_cap, self.total_cap, self.daily_max_loss) <= 0:

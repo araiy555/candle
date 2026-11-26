@@ -57,6 +57,9 @@ class App:
         self.want = None
         self.engine.on_clock(now)
 
+    def set_market(self, symbols, labels, problems) -> None:
+        self.engine.market.set_sources(symbols, labels, problems)
+
     def set_feed(self, ok: bool) -> None:
         self.engine.set_feed(ok)
 
@@ -130,6 +133,7 @@ class App:
                       notify=self.notify, notify_ids=set(cfg.watch_strategies),
                       settings=TradeSettings.load(cfg.data_dir / "settings.json"),
                       squeeze_log=old.squeeze_log if old is not None else None,
+                      market=old.market if old is not None else None,
                       tape_fetcher=self._fetch_tape)
         risk = RiskManager(cfg.risk)
         if mode == "live":
