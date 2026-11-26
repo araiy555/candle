@@ -155,6 +155,17 @@ class _EngineSink:
     def login_failed(self) -> None:
         pass
 
+    def set_client(self, client) -> None:
+        pass
+
+    def report(self, key: str, message: str | None) -> None:
+        """接続や処理の問題を画面に出す（message が None なら解消）。"""
+        if self.engine:
+            if message:
+                self.engine.warnings[key] = message
+            else:
+                self.engine.warnings.pop(key, None)
+
 
 async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
                         engine_factory=None, app=None) -> None:
@@ -186,6 +197,7 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
 
     flush_task = asyncio.create_task(flusher())
     backoff = 1.0
+    errors = 0
     try:
         while not stop.is_set():
             try:
@@ -194,6 +206,7 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
                 if stop.is_set():
                     break
                 client = KabuClient(cfg.rest_url, sink.password)
+                sink.set_client(client)   # 発注や歩み値の取得も同じ接続（同じトークン）を使う
                 try:
                     await asyncio.to_thread(client.token)
                 except KabuApiError as e:
@@ -211,18 +224,28 @@ async def run_collector(cfg: Config, stop: asyncio.Event | None = None,
                     backoff = 1.0
                     sink.set_universe(symbols, store.known_names(), cfg.bar_minutes)
                     feed(True)
+                    sink.report("feed", None)
                     while not stop.is_set():
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
                         except asyncio.TimeoutError:
                             continue
-                        pipe.handle(json.loads(raw))
+                        try:
+                            pipe.handle(json.loads(raw))
+                        except Exception as e:
+                            # 1件の処理の失敗で受信全体を止めない。原因は画面とログに残す。
+                            errors += 1
+                            if errors <= 5 or errors % 500 == 0:
+                                log.exception("配信の処理でエラーが発生しました（%d回目）", errors)
+                            sink.report("handle", f"配信の処理でエラーが発生しています（{errors}回）: "
+                                                  f"{type(e).__name__}: {e}")
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # 切断・kabuステーション未起動など
                 feed(False)  # 切断中は新規の仮想買いを止める
                 pipe.builder.mark_gap()
                 log.warning("接続エラー: %s — %.0f秒後に再接続します", e, backoff)
+                sink.report("feed", f"kabuステーションに接続できていません: {type(e).__name__}: {e}")
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=backoff)
                 except asyncio.TimeoutError:

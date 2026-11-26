@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from datetime import datetime, time as dtime
 
 from .config import Config
@@ -29,6 +31,9 @@ class App:
         self.want: str | None = None    # ブラウザから要求された切り替え先
         self.engine: PaperEngine | None = None
         self.store = None
+        self.client = None              # 受信側と共有するAPI接続
+        self.problems: dict[str, str] = {}
+        self._tape_lock = threading.Lock()
 
     # --- 受信側（collector）から呼ばれる ---------------------------------------
     def setup(self, store) -> None:
@@ -60,8 +65,32 @@ class App:
         self.engine.load_history(symbols, minutes)
 
     def login_failed(self) -> None:
-        self.password = ""
-        self.login_error = "APIパスワードが違います。本番用のAPIパスワードを入力してください。"
+        # 起動時に確認済みのパスワードなので消さない（消すと再接続できなくなる）。画面に知らせて再試行する。
+        self.login_error = "APIパスワードが受け付けられませんでした。kabuステーションの状態を確認してください。"
+
+    def set_client(self, client) -> None:
+        """受信側が作った接続を共有する。
+
+        kabuステーションはトークンを発行し直すと前のトークンが無効になるため、
+        発注や歩み値の取得で別のトークンを作らないようにする。
+        """
+        self.client = client
+        broker = getattr(self.engine, "broker", None)
+        if broker is not None:
+            broker.client = client
+
+    def report(self, key: str, message: str | None) -> None:
+        if message:
+            self.problems[key] = message
+        else:
+            self.problems.pop(key, None)
+        self._show_problems()
+
+    def _show_problems(self) -> None:
+        if self.engine is not None:
+            for k in ("feed", "handle"):
+                self.engine.warnings.pop(k, None)
+            self.engine.warnings.update(self.problems)
 
     # --- ブラウザ側（web）から呼ばれる -----------------------------------------
     def login(self, password: str) -> None:
@@ -85,11 +114,11 @@ class App:
 
     def _fetch_tape(self, symbol: str) -> list[dict]:
         """歩み値APIから当日の約定を取る（スクイーズ検知の記録用。秒間2件の制限あり）。"""
-        from .kabu_client import KabuClient
-        if getattr(self, "_tape_client", None) is None:
-            self._tape_client = KabuClient(self.cfg.rest_url, self.password, min_interval=0.6,
-                                           timeout=10.0)
-        return self._tape_client.time_and_sales(symbol)
+        if self.client is None:
+            raise RuntimeError("APIに接続していません")
+        with self._tape_lock:          # 秒間2件の制限があるため、間隔を空けて1件ずつ
+            time.sleep(0.6)
+            return self.client.time_and_sales(symbol)
 
     # --- エンジンの作り直し -----------------------------------------------------
     def _build(self, mode: str, old: PaperEngine | None) -> PaperEngine:
@@ -107,7 +136,7 @@ class App:
             from .broker import KabuBroker
             from .kabu_client import KabuClient
             from .live import LiveEngine
-            client = KabuClient(cfg.rest_url, self.password, timeout=5.0)
+            client = self.client or KabuClient(cfg.rest_url, self.password, timeout=5.0)
             engine = LiveEngine(self.store, risk, broker=KabuBroker(client, cfg.live),
                                 stop_method=cfg.live.stop_method, **common)
         else:
@@ -123,5 +152,7 @@ class App:
             engine.risk.feed_ok = old.risk.feed_ok
             if engine.flow is not None and old.flow is not None:
                 engine.flow = old.flow   # 直近の約定の流れも引き継ぐ
+            engine.last_tick, engine.last_bar = old.last_tick, old.last_bar
+            engine.warnings.update(self.problems)
             engine.snapshot = {}
         return engine

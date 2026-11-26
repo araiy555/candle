@@ -170,3 +170,60 @@ def test_open_symbols_and_known_names():
     store.save_watchlist("2026-11-24", [dict(rank=1, symbol="9434", name="ＳＢ", turnover=1)])
     store.save_watchlist("2026-11-25", [dict(rank=1, symbol="7203", name="トヨタ", turnover=1)])
     assert store.known_names() == {"9434": "ＳＢ", "7203": "トヨタ"}
+
+
+def test_app_end_to_end_survives_a_bad_message(tmp_path, monkeypatch):
+    """ブラウザ操作用の起動経路（App）で、実際の接続の流れを通す。"""
+    websockets = pytest.importorskip("websockets")
+    from candle.app import App
+
+    monkeypatch.setenv("KABU_API_PASSWORD", "pw")
+    _MockKabu.calls = []
+    http = ThreadingHTTPServer(("127.0.0.1", 0), _MockKabu)
+    threading.Thread(target=http.serve_forever, daemon=True).start()
+    full = lambda t, price, vol: {
+        **msg("7203", t, price, vol), "VWAP": 3005.5, "PreviousClose": 2990.0,
+        "ChangePreviousClose": 20.0, "ChangePreviousClosePer": 0.67, "BidPrice": price + 1,
+        "BidQty": 300.0, "AskPrice": price - 1, "AskQty": 500.0, "TradingValue": 1.0e9,
+        "Sell1": {"Time": "2026-11-24T09:00:01+09:00", "Sign": "0101", "Price": price + 1, "Qty": 300.0},
+        "Buy1": {"Time": "2026-11-24T09:00:01+09:00", "Sign": "0101", "Price": price - 1, "Qty": 500.0},
+        "Sell2": {"Price": price + 2, "Qty": 100.0}, "Buy2": {"Price": price - 2, "Qty": 100.0},
+        "MarketOrderSellQty": 0.0, "MarketOrderBuyQty": 0.0, "OverSellQty": 9000.0, "UnderBuyQty": 8000.0}
+
+    async def scenario():
+        stop = asyncio.Event()
+
+        async def push(ws):
+            await ws.send("{not json")                           # 壊れた配信
+            for m in [full("08:55:00", 3000, 0), full("09:00:01", 3010, 1000),
+                      full("09:04:00", 3050, 1700), full("09:05:01", 3040, 2000)]:
+                await ws.send(json.dumps(m))
+            await asyncio.sleep(1.5)
+            stop.set()
+            await ws.wait_closed()
+
+        async with websockets.serve(push, "127.0.0.1", 0) as server:
+            ws_port = server.sockets[0].getsockname()[1]
+
+            @dataclass
+            class TestConfig(Config):
+                @property
+                def ws_url(self):
+                    return f"ws://127.0.0.1:{ws_port}/kabusapi/websocket"
+
+            cfg = TestConfig(host="127.0.0.1", port=http.server_address[1], universe_size=2,
+                             exclude=["1570"], data_dir=tmp_path)
+            app = App(cfg)
+            await asyncio.wait_for(run_collector(cfg, stop, app=app), timeout=20)
+            return cfg, app
+
+    cfg, app = asyncio.run(scenario())
+    http.shutdown()
+    e = app.engine
+    assert e.last_tick is not None and e.prices["7203"] == 3040   # 壊れた1件の後も受信を続ける
+    assert "handle" in app.problems and "feed" not in app.problems
+    assert any("配信の処理でエラー" in w for w in e.warnings.values())
+    assert e.quotes["7203"]["VWAP"] == 3005.5 and e.watchlist == ["7203", "6758"]
+    assert app.client is not None
+    bars = Store(cfg.db_path).load_bars("7203")
+    assert [(b.close, b.volume, b.vwap) for b in bars][0] == (3050, 1700, 3005.5)
