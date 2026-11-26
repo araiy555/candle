@@ -85,6 +85,11 @@ class KabuClient:
         res = self._request("GET", f"/timeandsales/{symbol}@{exchange}")
         return (res or {}).get("TradingPrice") or []
 
+    def wallet_margin(self) -> float | None:
+        """信用新規可能額（信用で新しく建てられる金額）。"""
+        v = (self._request("GET", "/wallet/margin") or {}).get("MarginAccountWallet")
+        return float(v) if v is not None else None
+
     def symbol_info(self, symbol: str, exchange: int = 1) -> dict:
         return self._request("GET", f"/symbol/{symbol}@{exchange}")
 

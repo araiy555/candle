@@ -34,6 +34,8 @@ class App:
         self.client = None              # 受信側と共有するAPI接続
         self.problems: dict[str, str] = {}
         self._tape_lock = threading.Lock()
+        self.wallet: tuple[float | None, str] = (None, "未取得")   # (信用新規可能額, 状況)
+        self._wallet_at: datetime | None = None
 
     # --- 受信側（collector）から呼ばれる ---------------------------------------
     def setup(self, store) -> None:
@@ -55,6 +57,8 @@ class App:
             self.mode = self.want
             log.info("モードを切り替えました: %s", MODES[self.mode])
         self.want = None
+        self._refresh_wallet(now)
+        self.engine.buying_power, self.engine.buying_power_note = self.wallet
         self.engine.on_clock(now)
 
     def set_market(self, symbols, labels, problems) -> None:
@@ -115,6 +119,22 @@ class App:
         self.want = mode
         return True, ""
 
+    def _refresh_wallet(self, now: datetime) -> None:
+        """信用の買付余力を1分ごとに取得する（受信を止めないよう別スレッドで）。"""
+        if self.client is None or (self._wallet_at and (now - self._wallet_at).total_seconds() < 60):
+            return
+        self._wallet_at = now
+
+        def work(client=self.client):
+            try:
+                value = client.wallet_margin()
+                self.wallet = (value, f"{now:%H:%M} 取得") if value is not None else \
+                    (None, "応答に金額が含まれていません")
+            except Exception as e:
+                self.wallet = (None, f"取得できません（{e}）")
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _fetch_tape(self, symbol: str) -> list[dict]:
         """歩み値APIから当日の約定を取る（スクイーズ検知の記録用。秒間2件の制限あり）。"""
         if self.client is None:
@@ -152,6 +172,8 @@ class App:
             engine.history, engine.prices = old.history, old.prices
             engine.watchlist, engine.names = old.watchlist, old.names
             engine.quotes = old.quotes
+            engine.buying_power, engine.buying_power_note = self.wallet
+            engine.apply_sizing()
             engine.auto_chart = old.auto_chart
             engine.risk.feed_ok = old.risk.feed_ok
             if engine.flow is not None and old.flow is not None:

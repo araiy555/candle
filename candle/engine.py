@@ -42,7 +42,8 @@ class PaperEngine:
         self.settings = settings or TradeSettings(
             per_trade_cap=risk.limits.per_symbol_cap, total_cap=risk.limits.total_cap,
             daily_max_loss=risk.limits.daily_max_loss)
-        self.settings.apply_to(risk.limits)
+        self.buying_power: float | None = None     # 信用新規可能額（APIから取得した値。無ければ None）
+        self.buying_power_note: str = "未取得"
         self.close_all = False        # 管理画面の「全決済」
         self.close_ids: set[int] = set()   # 管理画面で個別に「決済」を押した取引
         self.last_tick: datetime | None = None   # 最後に株価を受信した時刻（動作確認用）
@@ -85,6 +86,7 @@ class PaperEngine:
         today = datetime.now(JST).date()
         risk.realized_today = sum(t.pnl() for t in store.load_trades(self.mode)
                                   if t.exit_time and t.exit_time.astimezone(JST).date() == today)
+        self.apply_sizing()
 
     def load_history(self, symbols: list[str], minutes: int, today=None) -> None:
         """保存済みの当日の足を読み込む。再起動してもチャートと判定を途切れさせないため。"""
@@ -178,6 +180,22 @@ class PaperEngine:
             self.on_auto_chart(bar.symbol)
         self.store.add_signal(self.mode, sid, bar.symbol, bar.end, bar.close, sig.bottom, "通知のみ",
                               sig.note, self.vwap(bar.symbol))
+
+    def capacity(self) -> float | None:
+        """信用で建てられる総額。本番では、余力に、すでに建てている分を足し戻す。"""
+        if self.buying_power is None:
+            return None
+        used = sum(t.entry_price * t.qty for t in self.open) if self.mode == "live" else 0.0
+        return self.buying_power + used
+
+    def apply_sizing(self) -> None:
+        """設定（金額または余力に対する割合）から、買いの上限を決める。"""
+        ok = self.settings.apply_to(self.risk.limits, self.capacity())
+        if ok:
+            self.warnings.pop("sizing", None)
+        else:
+            self.warnings["sizing"] = ("信用の買付余力を取得できていないため、割合ではなく金額の上限"
+                                       f"（1回 {self.settings.per_trade_cap:,.0f}円）で動いています。")
 
     def set_feed(self, ok: bool) -> None:
         """API接続の状態が変わった。切断中は新規の買いを止め、追跡中の検知は欠損として扱う。"""
@@ -288,6 +306,7 @@ class PaperEngine:
         """新規買いの可否と数量。"""
         if ts.time() >= self.exit_after:
             return 0, "時間外"
+        self.apply_sizing()
         if self.market_state(ts)["halt"]:
             return 0, "地合い悪化で新規停止中"
         unreal = sum(t.pnl(self.prices.get(t.symbol, t.entry_price)) for t in self.open)
@@ -321,9 +340,8 @@ class PaperEngine:
 
     def update_settings(self, data: dict) -> None:
         """管理画面からの設定変更。以後の新規の買いに適用する（保有中の分は変えない）。"""
-        new = TradeSettings.from_dict({**vars(self.settings), **data})
-        new.apply_to(self.risk.limits)
-        self.settings = new
+        self.settings = TradeSettings.from_dict({**vars(self.settings), **data})
+        self.apply_sizing()
 
     def chart_data(self, symbol: str) -> dict:
         """チャート表示用の当日の足。管理画面のスレッドから呼ばれる。"""
@@ -372,6 +390,8 @@ class PaperEngine:
             live=self.mode == "live", trading=self.trade_enabled,
             settings=vars(self.settings), warnings=list(self.warnings.values()),
             health=self.health(now),
+            buying_power=self.buying_power, buying_power_note=self.buying_power_note,
+            capacity=self.capacity(),
             market=self.market_state(now), halted=self.risk.halted,
             feed_ok=self.risk.feed_ok, auto_chart=self.auto_chart, realized_today=self.risk.realized_today,
             limits=vars(self.risk.limits),

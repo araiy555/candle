@@ -390,3 +390,38 @@ def test_engine_applies_min_drop_setting_and_records_the_decline():
     for b in make_bars(flat, "9433"):
         e.on_bar(b)
     assert len(sent) == 2 and round(store.recent_signals("paper")[0]["drop_pct"], 2) == 0.12
+
+
+def test_position_size_from_share_of_buying_power():
+    e, store = engine()
+    e.update_settings({"size_mode": "percent", "per_trade_pct": 20, "total_pct": 100})
+    assert e.risk.limits.per_symbol_cap == 500_000 and "sizing" in e.warnings   # 余力が不明なら金額の上限のまま
+    e.buying_power = 3_300_000                                    # 信用新規可能額
+    e.apply_sizing()
+    assert e.risk.limits.per_symbol_cap == 660_000 and e.risk.limits.total_cap == 3_300_000
+    assert "sizing" not in e.warnings
+    t0 = feed_hammer(e)
+    e.on_price("T", 1006, t0)
+    assert e.open[0].qty == 600                                   # 66万円 ÷ 1,006円 → 600株
+    e.on_clock(t0)
+    assert e.snapshot["buying_power"] == 3_300_000 and e.snapshot["limits"]["per_symbol_cap"] == 660_000
+    e.update_settings({"size_mode": "yen"})
+    assert e.risk.limits.per_symbol_cap == 500_000
+    import pytest
+    with pytest.raises(ValueError):
+        e.update_settings({"size_mode": "percent", "per_trade_pct": 50, "total_pct": 30})
+    with pytest.raises(ValueError):
+        e.update_settings({"total_pct": 150})
+
+
+def test_live_capacity_adds_back_open_positions():
+    from candle.live import LiveEngine
+    from test_live import FakeBroker
+    store = Store(":memory:")
+    rm = RiskManager(RiskLimits())
+    e = LiveEngine(store, rm, enabled={"tweezer_bottom"}, broker=FakeBroker())
+    e.buying_power = 2_000_000
+    e.open.append(trade(entry=1000.0, qty=1000))                  # すでに100万円分を建てている
+    assert e.capacity() == 3_000_000                              # 余力は減っているので足し戻す
+    e.update_settings({"size_mode": "percent", "per_trade_pct": 10, "total_pct": 50})
+    assert e.risk.limits.total_cap == 1_500_000 and e.risk.limits.per_symbol_cap == 300_000

@@ -61,6 +61,9 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <section><h2>設定</h2><div class="form">
 <div><label for="stop_mode">損切りライン</label><div class="row"><select id="stop_mode"><option value="pattern_low">パターンの安値</option><option value="percent">買値から一定率（%）下</option><option value="yen">買値から一定額（円）下</option></select><input id="stop_value" type="number" step="0.1" min="0"></div></div>
 <div><label for="trail_mode">トレーリングストップ</label><div class="row"><select id="trail_mode"><option value="r_step">リスク幅（R）ごとに引き上げ</option><option value="percent">高値から一定率（%）下に追従</option><option value="yen">高値から一定額（円）下に追従</option><option value="none">トレーリングなし</option></select><input id="trail_value" type="number" step="0.1" min="0"></div></div>
+<div><label for="size_mode">買いの上限の決め方</label><div class="row"><select id="size_mode"><option value="yen">金額で指定</option><option value="percent">信用の買付余力に対する割合で指定</option></select></div></div>
+<div><label for="per_trade_pct">割合で指定：1回の買い（余力の%）</label><div class="row"><input id="per_trade_pct" type="number" step="1" min="1" max="100" style="width:100%"></div></div>
+<div><label for="total_pct">割合で指定：同時に持つ合計（余力の%）　100＝余力いっぱい</label><div class="row"><input id="total_pct" type="number" step="5" min="1" max="100" style="width:100%"></div></div>
 <div><label for="per_trade_cap">1回の買いの上限（円）</label><div class="row"><input id="per_trade_cap" type="number" step="10000" min="0" style="width:100%"></div></div>
 <div><label for="total_cap">同時に持つ合計の上限（円）</label><div class="row"><input id="total_cap" type="number" step="10000" min="0" style="width:100%"></div></div>
 <div><label for="daily_max_loss">1日の最大損失（円）</label><div class="row"><input id="daily_max_loss" type="number" step="1000" min="0" style="width:100%"></div></div>
@@ -100,7 +103,7 @@ function table(el,heads,rows,empty){
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
 let halted=false,state=null,cur=null,formLoaded=false;const closing=new Set();
-const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth'];
+const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth'];
 function vdiff(price,vwap){if(price==null||!vwap)return '<span class="mut">-</span>';const d=(price-vwap)/vwap*100;return `<span class="${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${n(d,2)}%</span>`}
 function vcell(price,vwap){return vwap?`${n(vwap,1)} <span style="font-size:12px">(${vdiff(price,vwap)})</span>`:'<span class="mut">-</span>'}
 function nextRaise(p){if(p.next_raise)return `${n(p.next_raise[0],1)} で ${n(p.next_raise[1],1)} へ`;
@@ -115,7 +118,7 @@ function example(){
     `最初の損切りライン：<b>${f(stop)}円</b>（買値から ${f(-R)}円、ここで決済すると <span class="neg">${n(-R*Q)}円</span>）`+
     '<table style="margin-top:6px;width:auto"><thead><tr><th>買った後の高値</th><th>損切りライン</th><th>そこで決済した場合の損益</th></tr></thead><tbody>'+
     highs.map(h=>{const s=line(h),pl=(s-E)*Q;return `<tr><td>${f(h)}円</td><td>${f(s)}円</td><td>${pl>0?'<span class="pos">+'+n(pl)+'円</span>':pl<0?'<span class="neg">'+n(pl)+'円</span>':'0円'}</td></tr>`}).join('')+'</tbody></table>'}
-function syncForm(){example();$('stop_value').disabled=$('stop_mode').value==='pattern_low';$('trail_value').disabled=!['percent','yen'].includes($('trail_mode').value)}
+function syncForm(){example();const pc=$('size_mode').value==='percent';$('per_trade_pct').disabled=$('total_pct').disabled=!pc;$('per_trade_cap').disabled=$('total_cap').disabled=pc;$('stop_value').disabled=$('stop_mode').value==='pattern_low';$('trail_value').disabled=!['percent','yen'].includes($('trail_mode').value)}
 async function load(){
   let d;try{d=await (await fetch('/api/state')).json()}catch(e){$('feed').innerHTML='<span class="ng">プログラム停止中</span>';return}
   if(!d.time){$('time').textContent='起動中…';return}
@@ -142,7 +145,7 @@ async function load(){
   $('btn').textContent=d.halted?'新規受付を再開':'緊急停止';$('btn').className=d.halted?'':'stop';
   const unreal=d.positions.reduce((a,p)=>a+(p.pnl||0),0);
   $('kpis').innerHTML=[['含み損益',yen(unreal)+' 円'],['本日の確定損益',yen(d.realized_today)+' 円'],
-    ['投資額 / 上限',n(d.exposure)+' / '+n(d.limits.total_cap)+' 円'],['1日の最大損失',n(d.limits.daily_max_loss)+' 円'],
+    ['投資額 / 上限',n(d.exposure)+' / '+n(d.limits.total_cap)+' 円'],['1回の買いの上限',n(d.limits.per_symbol_cap)+' 円'],['信用の買付余力',d.buying_power==null?`<span class="mut" style="font-size:13px">${esc(d.buying_power_note||'未取得')}</span>`:n(d.buying_power)+' 円'],['1日の最大損失',n(d.limits.daily_max_loss)+' 円'],
     ['保有数',d.positions.length]].map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('');
   table('positions',['戦略','銘柄','状態','株数','サイン時刻','エントリー','現在値','VWAP（現在値との差）','初期損切り','現在の損切り','次の引き上げ','含み損益','R','保有時間',''],
     d.positions.map(p=>[esc(p.strategy),`<button class="link" data-sym="${esc(p.symbol)}">${esc(p.symbol)} ${esc(p.name||'')}</button>`,esc(p.state),n(p.qty),hm(p.signal_time),n(p.entry_price,1),n(p.price,1),vcell(p.price,p.vwap),n(p.initial_stop,1),
@@ -248,7 +251,7 @@ $('kabu').onclick=()=>kabu(cur,$('kmsg'));
 document.querySelectorAll('#modes button').forEach(b=>b.onclick=async()=>{const m=b.dataset.mode;if(state&&state.mode_key===m)return;
   if(m==='live'){const a=prompt('本番に切り替えます。毛抜き底のサインが出ると、確認なしで実際に信用取引の買い注文を出します。\n開始するには yes と入力してください。');if((a||'').trim().toLowerCase()!=='yes')return}
   try{const r=await (await fetch('/api/mode?m='+m,{method:'POST'})).json();if(!r.ok)alert(r.message)}catch(e){alert('切り替えできませんでした')}load()});
-$('stop_mode').onchange=$('trail_mode').onchange=syncForm;
+$('stop_mode').onchange=$('trail_mode').onchange=$('size_mode').onchange=syncForm;
 $('stop_value').oninput=$('trail_value').oninput=example;
 $('save').onclick=async()=>{const body={};for(const k of FIELDS)body[k]=$(k).value;
   try{const r=await (await fetch('/api/settings',{method:'POST',body:JSON.stringify(body)})).json();$('savemsg').textContent=r.message;if(r.ok)formLoaded=false}catch(e){$('savemsg').textContent='保存できませんでした'}};

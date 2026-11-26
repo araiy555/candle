@@ -18,6 +18,9 @@ class TradeSettings:
     trail_value: float = 0.5       # percent なら %、yen なら円
     per_trade_cap: float = 500_000   # 1回の買いの上限（円）
     total_cap: float = 1_000_000     # 同時に持つ合計の上限（円）
+    size_mode: str = "yen"           # 上限の決め方: yen=金額で指定, percent=信用の買付余力に対する割合で指定
+    per_trade_pct: float = 10        # percent のとき: 1回の買いに使う割合（%）
+    total_pct: float = 30            # percent のとき: 同時に持つ合計の割合（%）。100で余力いっぱい
     daily_max_loss: float = 10_000   # 1日の最大損失（円）
     max_hold_min: float = 0          # 最大保有時間（分）。0なら時間では決済しない
     quiet_open_min: float = 15       # 寄り付き（9:00）からこの分数は、通知も売買もしない
@@ -45,6 +48,12 @@ class TradeSettings:
             raise ValueError("直前の下落率の下限は0〜10%にしてください")
         if min(self.mkt_fut_drop, self.mkt_topix_drop) <= 0 or not 0 <= self.mkt_breadth <= 100:
             raise ValueError("地合いの基準は、下落率は0より大きく、割合は0〜100%にしてください")
+        if self.size_mode not in ("yen", "percent"):
+            raise ValueError("上限の決め方が不正です")
+        if not (0 < self.per_trade_pct <= 100 and 0 < self.total_pct <= 100):
+            raise ValueError("余力に対する割合は、0より大きく100%以下にしてください")
+        if self.per_trade_pct > self.total_pct:
+            raise ValueError("1回の割合は、合計の割合以下にしてください")
         if self.max_hold_min < 0:
             raise ValueError("最大保有時間は0以上にしてください")
         if min(self.per_trade_cap, self.total_cap, self.daily_max_loss) <= 0:
@@ -60,10 +69,20 @@ class TradeSettings:
             return entry - self.stop_value
         return pattern_low
 
-    def apply_to(self, limits) -> None:
+    def apply_to(self, limits, capacity: float | None = None) -> bool:
+        """上限をリスク管理に反映する。capacity は信用で建てられる総額（余力＋すでに建てている分）。
+
+        割合で指定していて capacity が分かっていれば、その割合から金額を決める。
+        分からない場合は金額の指定にとどめる（戻り値 False）。知らない金額で大きく買わないため。
+        """
+        limits.daily_max_loss = self.daily_max_loss
+        if self.size_mode == "percent" and capacity is not None and capacity > 0:
+            limits.per_symbol_cap = capacity * self.per_trade_pct / 100
+            limits.total_cap = capacity * self.total_pct / 100
+            return True
         limits.per_symbol_cap = self.per_trade_cap
         limits.total_cap = self.total_cap
-        limits.daily_max_loss = self.daily_max_loss
+        return self.size_mode != "percent"
 
     @classmethod
     def from_dict(cls, data: dict) -> "TradeSettings":
