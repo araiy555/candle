@@ -46,7 +46,8 @@ port = 8765                # 管理画面 http://localhost:8765 （このPCか�
 
 [notify]
 # 通知する戦略ID（squeeze は板と約定の流れ、fvg_hold / fvg_break はFVGの反発・割れ）
-strategies = ["tweezer_bottom", "squeeze", "fvg_hold", "fvg_break"]
+# wall_break は大口の売り板を買いが吸収して突破したとき。wall_approach（売り板への接近）も指定できる
+strategies = ["tweezer_bottom", "squeeze", "fvg_hold", "fvg_break", "wall_break"]
 desktop = true             # Windowsのデスクトップ通知
 sound = true               # 通知音
 copy_code = true           # 通知と同時に銘柄コードをコピーする（kabuステーションに貼り付け用）

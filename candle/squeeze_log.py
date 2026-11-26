@@ -92,6 +92,9 @@ class SqueezeLog:
     def __init__(self, store, tape_fetcher=None):
         self.conn = store.conn
         self.conn.executescript(SCHEMA)
+        if "kind" not in {r[1] for r in self.conn.execute("PRAGMA table_info(squeeze_events)")}:
+            # kind: 'squeeze'（板と約定の流れ） / 'wall'（大口の売り板）
+            self.conn.execute("ALTER TABLE squeeze_events ADD COLUMN kind TEXT NOT NULL DEFAULT 'squeeze'")
         # 前回の実行中に追跡が終わらなかった分は、推測で埋めずに「未完了」として残す
         self.conn.execute(
             "UPDATE squeeze_events SET status='incomplete', "
@@ -128,19 +131,22 @@ class SqueezeLog:
                 a.last_price, a.last_trade_time = tick.price, now
                 a.max_price, a.min_price = max(a.max_price, tick.price), min(a.min_price, tick.price)
 
-    def on_signal(self, sig: FlowSignal, msg: dict, name: str | None) -> int:
-        """検知を保存し、追跡を始める。上がるかどうかに関係なく必ず保存する。"""
+    def on_signal(self, sig, msg: dict, name: str | None, kind: str = "squeeze") -> int:
+        """検知を保存し、追跡を始める。上がるかどうかに関係なく必ず保存する。
+
+        sig は symbol / time / price / metrics / conditions を持つもの（スクイーズ、売り板の出来事）。
+        """
         t0 = sig.time.astimezone(JST)
         f = lambda k: float(msg[k]) if msg.get(k) is not None else None
         cur = self.conn.execute(
             "INSERT INTO squeeze_events (symbol,name,time,price,prev_close,change,change_pct,"
-            "volume,metrics,conditions,board,horizons,max_price,min_price,status) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'tracking')",
+            "volume,metrics,conditions,board,horizons,max_price,min_price,status,kind) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'tracking',?)",
             (sig.symbol, name, t0.isoformat(), sig.price, f("PreviousClose"),
              f("ChangePreviousClose"), f("ChangePreviousClosePer"), f("TradingVolume"),
              json.dumps(sig.metrics, ensure_ascii=False),
              json.dumps(sig.conditions, ensure_ascii=False), _board(msg), "{}",
-             sig.price, sig.price))
+             sig.price, sig.price, kind))
         event_id = cur.lastrowid
         pre = [self._row(event_id, (t.t - t0).total_seconds(), t) for t in self.recent[sig.symbol]
                if (t0 - t.t).total_seconds() <= PRE_SECONDS]

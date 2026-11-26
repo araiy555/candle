@@ -14,8 +14,9 @@ from .bars import JST, SESSIONS, Bar
 from . import fvg
 from .flow import FlowDetector, FlowParams
 from .market import MarketMonitor
-from .patterns import (FLOW_STRATEGY, FVG_STRATEGIES, STRATEGIES, STRATEGY_BY_ID, Params,
-                       contiguous_tail, decline)
+from .patterns import (FLOW_STRATEGY, FVG_STRATEGIES, STRATEGIES, STRATEGY_BY_ID, WALL_STRATEGIES,
+                       Params, contiguous_tail, decline)
+from .wall import WallTracker
 from .risk import RiskManager
 from .settings import TradeSettings
 from .squeeze_log import SqueezeLog
@@ -53,7 +54,11 @@ class PaperEngine:
         self.slippage, self.exit_after = slippage, exit_after
         self.strategies = [s for s in STRATEGIES if enabled is None or s.id in enabled]
         ids = {s.id for s in self.strategies}
-        want_flow = FLOW_STRATEGY in ids or (notify_ids is not None and FLOW_STRATEGY in notify_ids)
+        wanted = ids | (notify_ids or set())
+        # 大口の売り板の観察（約定の向きと出来高の差分が要るので、スクイーズの検出器と一緒に動かす）
+        self.walls = WallTracker() if wanted & set(WALL_STRATEGIES.values()) else None
+        want_flow = FLOW_STRATEGY in wanted or self.walls is not None
+        self.flow_notify = FLOW_STRATEGY in wanted   # スクイーズそのものを通知・記録するか
         self.flow = FlowDetector(flow_params) if want_flow else None
         self.flow_trades = FLOW_STRATEGY in ids      # スクイーズで売買もするか（通知だけなら False）
         # 検知の記録と、その後の値動きの追跡（モードを切り替えても同じものを使い続ける）
@@ -156,6 +161,33 @@ class PaperEngine:
         p.breadth = st.mkt_breadth if st.mkt_breadth > 0 else 101.0   # 0 は「止めない」
         return self.market.state(now.astimezone(JST), self.watchlist)
 
+    def _check_walls(self, symbol: str, msg: dict, now: datetime) -> None:
+        """大口の売り板の出来事（接近・突破・取消・跳ね返し）を記録し、対象のものを通知する。"""
+        if self.walls is None:
+            return
+        for ev in self.walls.update(symbol, msg, now.astimezone(JST), self.flow.last_trade[0]):
+            if self.in_quiet_open(now) or now.astimezone(JST).time() >= self.exit_after:
+                continue
+            if ev.kind != "approach" and self.squeeze_log is not None:
+                # 突破だけでなく、取消で消えた・跳ね返された場合も、比較のためにすべて残す
+                self.squeeze_log.on_signal(ev, msg, self.names.get(symbol), kind="wall")
+            sid = WALL_STRATEGIES.get(ev.kind)
+            if sid is None or not (self.notify_ids is None or sid in self.notify_ids):
+                continue
+            key = (sid, symbol, ev.time.isoformat())
+            if key in self.seen:
+                continue
+            self.seen.add(key)
+            name = STRATEGY_BY_ID[sid].name
+            log.info("サイン %s %s %s", name, symbol, ev.note)
+            if self.notify:
+                label = f"{symbol} {self.names.get(symbol) or ''}".strip()
+                self.notify(f"{name}  {label}", f"{ev.time:%H:%M:%S} {ev.price:,.1f}円　{ev.note}", symbol)
+            if self.auto_chart and self.on_auto_chart:
+                self.on_auto_chart(symbol)
+            self.store.add_signal(self.mode, sid, symbol, ev.time, ev.price, ev.wall.price, "通知のみ",
+                                  ev.note, self.vwap(symbol))
+
     def _check_fvg(self, bar: Bar, history) -> None:
         """足の確定ごとに、FVGの反発・割れを判定して通知する（売買はしない）。"""
         if not self.fvg_kinds:
@@ -211,7 +243,9 @@ class PaperEngine:
         sig = self.flow.update(symbol, msg, now)
         if self.squeeze_log is not None:
             self.squeeze_log.on_tick(symbol, msg, now, *self.flow.last_trade)
-        if sig is None or now.astimezone(JST).time() >= self.exit_after or self.in_quiet_open(now):
+        self._check_walls(symbol, msg, now)
+        if (sig is None or not self.flow_notify or now.astimezone(JST).time() >= self.exit_after
+                or self.in_quiet_open(now)):
             return
         name = STRATEGY_BY_ID[FLOW_STRATEGY].name
         key = (FLOW_STRATEGY, symbol, sig.time.isoformat())

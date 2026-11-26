@@ -178,6 +178,8 @@ class App:
             engine.risk.feed_ok = old.risk.feed_ok
             if engine.flow is not None and old.flow is not None:
                 engine.flow = old.flow   # 直近の約定の流れも引き継ぐ
+            if engine.walls is not None and old.walls is not None:
+                engine.walls = old.walls   # 追跡中の売り板も引き継ぐ
             engine.last_tick, engine.last_bar = old.last_tick, old.last_bar
             engine.warnings.update(self.problems)
             engine.snapshot = {}

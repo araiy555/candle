@@ -201,7 +201,11 @@ STRATEGIES: tuple[Strategy, ...] = (
     # FVG（fvg.py が判定する）。通知のみで、売買の対象にはしない。
     Strategy("fvg_hold", "FVG反発", lambda bars, p: None),
     Strategy("fvg_break", "FVG割れ", lambda bars, p: None),
+    # 大口の売り板（wall.py が判定する）。通知のみ。
+    Strategy("wall_break", "売り板突破", lambda bars, p: None),
+    Strategy("wall_approach", "売り板接近", lambda bars, p: None),
 )
+WALL_STRATEGIES = {"break": "wall_break", "approach": "wall_approach"}
 FLOW_STRATEGY = "squeeze"
 FVG_STRATEGIES = {"hold": "fvg_hold", "break": "fvg_break"}
 STRATEGY_BY_ID = {s.id: s for s in STRATEGIES}

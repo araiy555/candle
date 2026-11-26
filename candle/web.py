@@ -50,7 +50,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 </style></head><body>
 <header><h1>candle</h1><span class="pill" id="mode"></span><span class="seg" id="modes" hidden><button data-mode="watch">通知のみ</button><button data-mode="paper">テスト</button><button data-mode="live">本番</button></span><span class="pill" id="feed"></span>
 <span class="pill" id="halt"></span><span class="mut" id="time"></span>
-<a href="/squeeze" style="color:var(--acc);font-size:13px">スクイーズ検知履歴</a>
+<a href="/squeeze" style="color:var(--acc);font-size:13px">検知履歴（スクイーズ・売り板）</a>
 <label class="pill" style="cursor:pointer"><input type="checkbox" id="auto" style="vertical-align:-2px"> サインが出たらkabuステーションのチャートを自動で切り替える</label>
 <span style="flex:1"></span><button id="closeall" hidden>全ポジションを決済</button><button id="btn"></button></header>
 <main>
@@ -304,7 +304,9 @@ def start_web(target, port: int = 8765, data_dir=None, db_path=None) -> Threadin
                 ok = lambda v: v is None or (len(v) == 10 and v.replace("-", "").isdigit())
                 if not (ok(day("from")) and ok(day("to"))):
                     return self._send(b"bad date", "text/plain", 400)
-                res = squeeze_web.list_events(db_path, day("from"), day("to"))
+                kind = day("kind") if day("kind") in ("squeeze", "wall") else "squeeze"
+                outcome = day("outcome") if day("outcome") in ("break", "pulled", "rejected") else None
+                res = squeeze_web.list_events(db_path, day("from"), day("to"), kind, outcome)
                 self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"), "application/json")
             elif self.path.startswith("/api/squeeze/event?id="):
                 from . import squeeze_web

@@ -193,7 +193,7 @@ def test_web_pages_and_apis(tmp_path):
     base = f"http://127.0.0.1:{srv.server_address[1]}"
     get = lambda p: urllib.request.urlopen(base + p).read().decode()
     try:
-        assert "スクイーズ検知履歴" in get("/squeeze") and 'href="/squeeze"' in get("/")
+        assert "検知履歴" in get("/squeeze") and 'href="/squeeze"' in get("/")
         lst = json.loads(get("/api/squeeze/list"))
         assert len(lst["events"]) == 1 and lst["days"] == ["2026-11-25"]
         assert json.loads(get("/api/squeeze/list?from=2026-11-26&to=2026-11-26"))["events"] == []
@@ -207,3 +207,44 @@ def test_web_pages_and_apis(tmp_path):
         srv.shutdown()
     empty = squeeze_web.list_events(tmp_path / "none.sqlite")
     assert empty["events"] == [] and empty["aggregate"]["total"] == 0
+
+
+def test_wall_events_are_recorded_separately_with_outcomes(tmp_path):
+    from test_wall import asks_with_wall, board
+
+    store = Store(tmp_path / "c.sqlite")
+    sent = []
+    e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"},
+                    notify=lambda *a: sent.append(a), notify_ids={"wall_break"})
+    e.names = {"7203": "トヨタ", "6758": "ソニーG"}
+    assert e.walls is not None and e.flow is not None and not e.flow_notify
+
+    def feed(sym, steps):
+        cum = 100_000
+        for sec, price, asks, vol in steps:
+            cum += vol
+            e.on_board(sym, {**board(price, asks), "TradingVolume": cum}, T0 + timedelta(seconds=sec))
+
+    feed("7203", [(0, 998, asks_with_wall(999, 1003, 30000), 0),
+                  (15, 1002, asks_with_wall(1002, 1003, 30000), 500),
+                  (20, 1003, asks_with_wall(1003, 1003, 18000), 12000),
+                  (25, 1003, asks_with_wall(1003, 1003, 8000), 10000),
+                  (30, 1004, asks_with_wall(1004, 9999, 0), 8000),
+                  (80, 1010, asks_with_wall(1011, 9999, 0), 3000)])
+    feed("6758", [(0, 998, asks_with_wall(999, 1003, 30000), 0),
+                  (15, 1002, asks_with_wall(1002, 1003, 30000), 500),
+                  (20, 1002, asks_with_wall(1002, 1003, 5000), 300),
+                  (25, 1004, asks_with_wall(1004, 9999, 0), 5000)])
+    assert [a[0] for a in sent] == ["売り板突破  7203 トヨタ"]            # 通知は「吸収して突破」だけ
+    assert "吸収して突破" in sent[0][1] and "30,000株" in sent[0][1]
+    e.on_clock(T0 + timedelta(seconds=400))
+    path = tmp_path / "c.sqlite"
+    assert squeeze_web.list_events(path)["events"] == []                # スクイーズの一覧には混ざらない
+    res = squeeze_web.list_events(path, kind="wall")
+    assert res["outcomes"] == {"break": 1, "pulled": 1}                 # 突破しなかった分も残る
+    brk = squeeze_web.list_events(path, kind="wall", outcome="break")["events"]
+    assert len(brk) == 1 and brk[0]["kind"] == "wall" and brk[0]["acquired"]["symbol"] == "7203"
+    assert brk[0]["metrics"]["executed_share"] == 1.0 and brk[0]["horizons"]["60"]["price"] == 1010
+    d = squeeze_web.get_event(path, brk[0]["id"])
+    assert any(c["key"] == "executed" and c["ok"] for c in d["conditions"]) and d["board"] is not None
+    assert store.recent_signals("paper")[0]["strategy_id"] == "wall_break"
