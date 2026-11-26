@@ -64,6 +64,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <div><label for="total_cap">同時に持つ合計の上限（円）</label><div class="row"><input id="total_cap" type="number" step="10000" min="0" style="width:100%"></div></div>
 <div><label for="daily_max_loss">1日の最大損失（円）</label><div class="row"><input id="daily_max_loss" type="number" step="1000" min="0" style="width:100%"></div></div>
 <div><label for="quiet_open_min">寄り付き後に待つ時間（分）　この間は通知も売買もしない</label><div class="row"><input id="quiet_open_min" type="number" step="1" min="0" style="width:100%"></div></div>
+<div><label for="min_drop_pct">直前の下落率の下限（%）　これ未満の下げは毛抜き底と見なさない。0＝除かない</label><div class="row"><input id="min_drop_pct" type="number" step="0.05" min="0" style="width:100%"></div></div>
 <div><label for="max_hold_min">最大保有時間（分）　0＝時間では決済しない</label><div class="row"><input id="max_hold_min" type="number" step="1" min="0" style="width:100%"></div></div>
 <div><div class="row" style="align-items:center"><button id="save">設定を保存</button><span class="mut" id="savemsg" style="font-size:12px"></span></div></div>
 </div><div id="example" style="margin-top:12px;font-size:13px"></div><div class="note" style="padding:10px 0 0">損切り・トレーリング・金額の上限は、テストと本番の売買に使います（次の買いから適用。保有中の分は買った時点の設定のまま）。寄り付き後に待つ時間は、通知のみのモードでも効きます。</div></section>
@@ -94,7 +95,7 @@ function table(el,heads,rows,empty){
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
 let halted=false,state=null,cur=null,formLoaded=false;const closing=new Set();
-const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min'];
+const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_drop_pct'];
 function vdiff(price,vwap){if(price==null||!vwap)return '<span class="mut">-</span>';const d=(price-vwap)/vwap*100;return `<span class="${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${n(d,2)}%</span>`}
 function vcell(price,vwap){return vwap?`${n(vwap,1)} <span style="font-size:12px">(${vdiff(price,vwap)})</span>`:'<span class="mut">-</span>'}
 function nextRaise(p){if(p.next_raise)return `${n(p.next_raise[0],1)} で ${n(p.next_raise[1],1)} へ`;
@@ -138,8 +139,8 @@ async function load(){
   table('stats',['戦略','取引数','勝率','PF','期待損益(円)','期待値(R)','合計損益(円)','平均保有'],
     d.stats.map(s=>[esc(s.strategy),s.trades,s.win_rate==null?'-':n(s.win_rate*100,1)+'%',s.pf==null?'-':n(s.pf,2),
       yen(s.expectancy),rr(s.expectancy_r),yen(s.total),s.avg_hold_min==null?'-':n(s.avg_hold_min)+'分']),'');
-  table('signals',['戦略','銘柄','発生時刻','価格','VWAP比','安値','内容','結果'],
-    d.signals.map(s=>[esc(s.strategy),`<button class="link" data-sym="${esc(s.symbol)}">${esc(s.symbol)} ${esc(s.name||'')}</button> <button data-kabu="${esc(s.symbol)}" style="padding:1px 8px;font-size:12px">kabuステで表示</button>`,md(s.time),n(s.price,1),vdiff(s.price,s.vwap),n(s.pattern_low,1),`<span class="l mut" style="white-space:normal;display:inline-block;max-width:420px;text-align:left">${esc(s.note||'')}</span>`,
+  table('signals',['戦略','銘柄','発生時刻','価格','VWAP比','直前の下落率','安値','内容','結果'],
+    d.signals.map(s=>[esc(s.strategy),`<button class="link" data-sym="${esc(s.symbol)}">${esc(s.symbol)} ${esc(s.name||'')}</button> <button data-kabu="${esc(s.symbol)}" style="padding:1px 8px;font-size:12px">kabuステで表示</button>`,md(s.time),n(s.price,1),vdiff(s.price,s.vwap),s.drop_pct==null?'<span class="mut">-</span>':'-'+n(s.drop_pct,2)+'%',n(s.pattern_low,1),`<span class="l mut" style="white-space:normal;display:inline-block;max-width:420px;text-align:left">${esc(s.note||'')}</span>`,
       s.action==='entry'?'エントリー':s.action==='通知のみ'?'通知':'<span class="mut">見送り: '+esc(s.action)+'</span>']),'まだサインはありません');
   table('history',['戦略','銘柄','株数','買い','買値','決済','売値','理由','損益(円)','R'],
     d.history.map(t=>[esc(t.strategy),esc(t.symbol),n(t.qty),md(t.entry_time),n(t.entry_price,1),md(t.exit_time),n(t.exit_price,1),

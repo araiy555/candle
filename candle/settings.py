@@ -21,6 +21,7 @@ class TradeSettings:
     daily_max_loss: float = 10_000   # 1日の最大損失（円）
     max_hold_min: float = 0          # 最大保有時間（分）。0なら時間では決済しない
     quiet_open_min: float = 15       # 寄り付き（9:00）からこの分数は、通知も売買もしない
+    min_drop_pct: float = 0.3        # 直前の下落率の下限（%）。横ばいの中のサインを除く。0なら除かない
 
     def validate(self) -> None:
         if self.stop_mode not in STOP_MODES:
@@ -37,6 +38,8 @@ class TradeSettings:
             raise ValueError("トレーリングの率は20%未満にしてください")
         if not 0 <= self.quiet_open_min <= 120:
             raise ValueError("寄り付き後に待つ時間は0〜120分にしてください")
+        if not 0 <= self.min_drop_pct <= 10:
+            raise ValueError("直前の下落率の下限は0〜10%にしてください")
         if self.max_hold_min < 0:
             raise ValueError("最大保有時間は0以上にしてください")
         if min(self.per_trade_cap, self.total_cap, self.daily_max_loss) <= 0:

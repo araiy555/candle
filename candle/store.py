@@ -70,6 +70,8 @@ class Store:
             self.conn.execute("ALTER TABLE bars ADD COLUMN vwap REAL")
         if "vwap" not in {r[1] for r in self.conn.execute("PRAGMA table_info(signals)")}:
             self.conn.execute("ALTER TABLE signals ADD COLUMN vwap REAL")
+        if "drop_pct" not in {r[1] for r in self.conn.execute("PRAGMA table_info(signals)")}:
+            self.conn.execute("ALTER TABLE signals ADD COLUMN drop_pct REAL")
         if "note" not in {r[1] for r in self.conn.execute("PRAGMA table_info(signals)")}:
             self.conn.execute("ALTER TABLE signals ADD COLUMN note TEXT NOT NULL DEFAULT ''")
         self.conn.commit()
@@ -139,18 +141,20 @@ class Store:
 
     def add_signal(self, mode: str, strategy_id: str, symbol: str, time: datetime,
                    price: float, pattern_low: float, action: str, note: str = "",
-                   vwap: float | None = None) -> None:
+                   vwap: float | None = None, drop_pct: float | None = None) -> None:
         self.conn.execute(
-            "INSERT INTO signals (mode,strategy_id,symbol,time,price,pattern_low,action,note,vwap) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (mode, strategy_id, symbol, time.isoformat(), price, pattern_low, action, note, vwap))
+            "INSERT INTO signals (mode,strategy_id,symbol,time,price,pattern_low,action,note,vwap,"
+            "drop_pct) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (mode, strategy_id, symbol, time.isoformat(), price, pattern_low, action, note, vwap,
+             drop_pct))
         self.conn.commit()
 
     def recent_signals(self, mode: str, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT strategy_id,symbol,time,price,pattern_low,action,note,vwap FROM signals "
-            "WHERE mode=? ORDER BY id DESC LIMIT ?", (mode, limit)).fetchall()
-        keys = ("strategy_id", "symbol", "time", "price", "pattern_low", "action", "note", "vwap")
+            "SELECT strategy_id,symbol,time,price,pattern_low,action,note,vwap,drop_pct "
+            "FROM signals WHERE mode=? ORDER BY id DESC LIMIT ?", (mode, limit)).fetchall()
+        keys = ("strategy_id", "symbol", "time", "price", "pattern_low", "action", "note", "vwap",
+                "drop_pct")
         return [dict(zip(keys, r)) for r in rows]
 
     _TRADE_COLS = ("mode", "strategy_id", "symbol", "signal_time", "entry_time", "entry_price",

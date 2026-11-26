@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from collections import defaultdict, deque
 from datetime import datetime, time
 
 from .bars import JST, SESSIONS, Bar
 from .flow import FlowDetector, FlowParams
-from .patterns import FLOW_STRATEGY, STRATEGIES, STRATEGY_BY_ID, Params, contiguous_tail
+from .patterns import (FLOW_STRATEGY, STRATEGIES, STRATEGY_BY_ID, Params, contiguous_tail,
+                       decline)
 from .risk import RiskManager
 from .settings import TradeSettings
 from .squeeze_log import SqueezeLog
@@ -55,6 +57,7 @@ class PaperEngine:
         self.squeeze_log = squeeze_log if squeeze_log is not None else (
             SqueezeLog(store, tape_fetcher) if self.flow is not None else None)
         self.notes: dict[tuple[str, str, str], str] = {}
+        self.drops: dict[tuple[str, str, str], float | None] = {}
         self.quotes: dict[str, dict] = {}    # 銘柄ごとの最新の受信値（VWAP・前日比・高安など。表示用）
         self.history: dict[str, deque[Bar]] = defaultdict(lambda: deque(maxlen=400))  # 1分足でも当日分が収まる
         self.prices: dict[str, float] = {}
@@ -97,8 +100,11 @@ class PaperEngine:
         if not bar.complete or bar.start.time() >= self.exit_after or self.in_quiet_open(bar.end):
             return
         window = contiguous_tail(list(h)[-80:])
+        params = replace(self.params, min_drop=self.settings.min_drop_pct / 100)
+        drop = decline(window, 2, params)
+        drop_pct = None if drop is None else round(drop * 100, 3)
         for s in self.strategies:
-            low = s.detect(window, self.params)
+            low = s.detect(window, params)
             if low is None:
                 continue
             key = (s.id, bar.symbol, bar.end.isoformat())
@@ -114,10 +120,11 @@ class PaperEngine:
             if self.auto_chart and self.on_auto_chart:
                 self.on_auto_chart(bar.symbol)
             if self.trade_enabled:
+                self.drops[(s.id, bar.symbol, bar.end.isoformat())] = drop_pct
                 self.pending[bar.symbol].append((s.id, bar.end, low))
             else:
                 self.store.add_signal(self.mode, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ",
-                                      vwap=self.vwap(bar.symbol))
+                                      vwap=self.vwap(bar.symbol), drop_pct=drop_pct)
 
     def in_quiet_open(self, ts: datetime) -> bool:
         """寄り付き直後の、サインを出さない時間帯か。値動きが荒く、サインが出すぎるため。"""
@@ -210,7 +217,8 @@ class PaperEngine:
         qty, why = self._check(strategy_id, symbol, entry, stop, ts)
         self.store.add_signal(self.mode, strategy_id, symbol, sig_time, price, low, why,
                               self.notes.pop((strategy_id, symbol, sig_time.isoformat()), ""),
-                              self.vwap(symbol))
+                              self.vwap(symbol),
+                              self.drops.pop((strategy_id, symbol, sig_time.isoformat()), None))
         if qty <= 0:
             log.info("見送り %s %s: %s", strategy_id, symbol, why)
             return

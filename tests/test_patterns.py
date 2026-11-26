@@ -70,3 +70,17 @@ def test_contiguity_and_lunch_break():
     assert len(contiguous_tail(bars)) == 1                               # 不完全な足で途切れる
     gap = make_bars([(1, 2, 0.5, 1.5)] * 2) + make_bars([(1, 2, 0.5, 1.5)] * 2, start=(9, 20))
     assert len(contiguous_tail(gap)) == 2                                # 欠けた足で途切れる
+
+
+def test_minimum_decline_filters_out_sideways_tweezers():
+    from candle.patterns import decline
+    # 横ばい：594.0〜594.6 の中で形だけ毛抜き底になる
+    flat = [(594.6 - 0.05 * i, 594.7 - 0.05 * i, 594.3 - 0.05 * i, 594.5 - 0.05 * i) for i in range(6)]
+    flat += [(594.2, 594.3, 594.0, 594.1), (594.1, 594.4, 594.0, 594.3)]
+    bars = make_bars(flat)
+    assert P.tweezer_bottom(bars, Params()) == 594.0             # 下限なしなら成立してしまう
+    d = decline(bars, 2, Params())
+    assert 0.001 < d < 0.0013                                    # 下落率は約0.12%
+    assert P.tweezer_bottom(bars, Params(min_drop=0.003)) is None
+    # しっかり下げた後（約7%）なら、下限があっても成立する
+    assert P.tweezer_bottom(make_bars(DOWN + CASES["tweezer_bottom"][0]), Params(min_drop=0.003)) == 995

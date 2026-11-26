@@ -21,6 +21,7 @@ class Params:
     db_min_gap: int = 4          # 2つの底の間の最小本数
     db_tolerance: float = 0.003  # 2つの底の安値の許容差（価格比）
     db_swing: int = 2            # 底と認める左右の本数
+    min_drop: float = 0.0        # 直前の下落率の下限（0.003 = 0.3%）。これ未満の下げはサインにしない
 
 
 def expected_next(start: datetime, minutes: int) -> datetime | None:
@@ -58,13 +59,27 @@ def _bear(b: Bar) -> bool:
     return b.close < b.open
 
 
+def decline(bars: Sequence[Bar], n: int, p: Params) -> float | None:
+    """パターン（末尾n本）に向けて、直前にどれだけ下げてきたか。
+
+    直前 trend_bars 本とパターンの中での最高値から、パターンの安値までの下落率。
+    """
+    if len(bars) < n + p.trend_bars:
+        return None
+    high = max(b.high for b in bars[-(n + p.trend_bars):])
+    low = min(b.low for b in bars[-n:])
+    return (high - low) / high if high > 0 else None
+
+
 def _downtrend(bars: Sequence[Bar], n: int, p: Params) -> bool:
     """パターン（末尾n本）の直前が下落局面で、パターン内に直近安値があるか。"""
     if len(bars) < n + p.trend_bars:
         return False
     prior = bars[-(n + p.trend_bars):-n]
     pattern_low = min(b.low for b in bars[-n:])
-    return prior[0].close > prior[-1].close and pattern_low <= min(b.low for b in prior)
+    if not (prior[0].close > prior[-1].close and pattern_low <= min(b.low for b in prior)):
+        return False
+    return (decline(bars, n, p) or 0.0) >= p.min_drop   # 横ばいの中の小さな上下は底打ちと見なさない
 
 
 def tweezer_bottom(bars: Sequence[Bar], p: Params) -> float | None:

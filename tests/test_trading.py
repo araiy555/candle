@@ -370,3 +370,23 @@ def test_vwap_is_shown_but_not_used_as_a_condition():
     assert len(e.open) == 1 and store.recent_signals("paper")[0]["vwap"] == 1049.0
     e.on_clock(t0)
     assert e.snapshot["positions"][0]["vwap"] == 1049.0
+
+
+def test_engine_applies_min_drop_setting_and_records_the_decline():
+    store = Store(":memory:")
+    sent = []
+    e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"},
+                    trade_enabled=False, notify=lambda *a: sent.append(a))
+    assert e.settings.min_drop_pct == 0.3
+    flat = [(594.6 - 0.05 * i, 594.7 - 0.05 * i, 594.3 - 0.05 * i, 594.5 - 0.05 * i) for i in range(6)]
+    flat += [(594.2, 594.3, 594.0, 594.1), (594.1, 594.4, 594.0, 594.3)]
+    for b in make_bars(flat, "8766"):
+        e.on_bar(b)
+    assert sent == []                                            # 横ばいの中の形は通知しない
+    for b in make_bars(DOWN + [(1010, 1011, 995, 998), (998, 1008, 995, 1006)], "7203"):
+        e.on_bar(b)
+    assert len(sent) == 1 and store.recent_signals("paper")[0]["drop_pct"] > 5
+    e.update_settings({"min_drop_pct": 0})
+    for b in make_bars(flat, "9433"):
+        e.on_bar(b)
+    assert len(sent) == 2 and round(store.recent_signals("paper")[0]["drop_pct"], 2) == 0.12
