@@ -198,6 +198,10 @@ STRATEGIES: tuple[Strategy, ...] = (
     Strategy("double_bottom", "二点底", double_bottom),
     # 板と約定の流れによる検出。足のパターンではないので、ここでは判定しない（flow.py が行う）。
     Strategy("squeeze", "スクイーズ", lambda bars, p: None),
+    # FVG（fvg.py が判定する）。通知のみで、売買の対象にはしない。
+    Strategy("fvg_hold", "FVG反発", lambda bars, p: None),
+    Strategy("fvg_break", "FVG割れ", lambda bars, p: None),
 )
 FLOW_STRATEGY = "squeeze"
+FVG_STRATEGIES = {"hold": "fvg_hold", "break": "fvg_break"}
 STRATEGY_BY_ID = {s.id: s for s in STRATEGIES}

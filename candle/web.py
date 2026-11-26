@@ -83,6 +83,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <span style="flex:1"></span><button id="close">閉じる</button></div>
 <div class="kpis" id="qinfo" style="padding:10px 16px 0;gap:18px"></div>
 <div style="padding:6px 16px 0;font-size:12px" class="mut"><span style="display:inline-block;width:22px;border-top:2px solid var(--acc);vertical-align:middle;margin-right:5px"></span>VWAP（受信した値。受信前の時間帯は線がありません）</div>
+<div style="padding:4px 16px 0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px" class="mut"><span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--up);vertical-align:middle;margin-right:5px"></span>直近の上昇の範囲（中央の線より上が割高ゾーン、下が割安ゾーン）</span><span><span style="display:inline-block;width:18px;height:8px;background:var(--warn);opacity:.75;vertical-align:middle;margin-right:5px"></span>上昇中の出来高の分布</span><span><span style="display:inline-block;width:18px;border-top:2px dashed var(--fg);vertical-align:middle;margin-right:5px"></span>上昇中のPOC</span><span><span style="display:inline-block;width:18px;height:8px;border:1.5px solid var(--warn);vertical-align:middle;margin-right:5px"></span>FVG</span><span><span style="display:inline-block;width:18px;border-top:2px solid #d4a700;vertical-align:middle;margin-right:5px"></span>上昇前のレンジのPOC</span></div>
 <div class="chart"><svg id="svg" role="img"></svg><div class="tip" id="tip"></div></div>
 <div class="note" id="note"></div></dialog>
 <script>
@@ -181,6 +182,23 @@ function draw(data){
   const every=Math.max(1,Math.ceil(70/bw));
   bars.forEach((b,i)=>{if(i%every===0)svg.appendChild(el('text',{x:Math.max(x(i),L+16),y:H-8,'text-anchor':'middle',fill:'var(--mut)','font-size':11},
     new Date(b.t).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'})))});
+  // 直近の上昇の範囲・割高/割安ゾーン・出来高の分布・FVG（ローソク足の下に描く）
+  const st=data.structure;
+  if(st){const ix=t=>bars.findIndex(b=>b.t===t),i0=ix(st.start),i1=ix(st.end);
+    if(i0>=0&&i1>i0){const xl=x(i0)-bw/2,xr=x(i1)+bw/2,yt=y(st.high),yb=y(st.low),ym=y(st.mid),right=W-R;
+      svg.appendChild(el('rect',{x:xl,y:yt,width:xr-xl,height:yb-yt,fill:'var(--acc)',opacity:.07}));
+      const pmax=Math.max(...st.profile.map(q=>q.vol),1),pw=Math.max(40,(xr-xl)*0.4),ph=Math.max(2,(yb-yt)/Math.max(st.profile.length,1)-1);
+      for(const q of st.profile){if(q.vol>0)svg.appendChild(el('rect',{x:xl+2,y:y(q.price)-ph/2,width:Math.max(1,q.vol/pmax*pw),height:ph,fill:'var(--warn)',opacity:.75}))}
+      for(const f of st.fvgs){const fi=ix(f.t);if(fi<1)continue;const bi=f.broken?ix(f.broken):-1,fx=x(fi-1)-bw/2,fr=bi>=0?x(bi)+bw/2:right;
+        svg.appendChild(el('rect',{x:fx,y:y(f.top),width:Math.max(2,fr-fx),height:Math.max(2,y(f.bottom)-y(f.top)),fill:'var(--warn)','fill-opacity':f.discount&&!f.broken?.18:.05,stroke:'var(--warn)','stroke-width':f.discount?1.5:1,'stroke-opacity':f.discount&&!f.broken?1:.45,'stroke-dasharray':f.broken?'4 3':'none'}));
+        if(f.discount)svg.appendChild(el('text',{x:Math.min(fr,right)-4,y:y(f.top)-3,'text-anchor':'end',fill:'var(--warn)','font-size':11},f.broken?'FVG（割れ）':'FVG'))}
+      svg.appendChild(el('rect',{x:xl,y:yt,width:xr-xl,height:yb-yt,fill:'none',stroke:'var(--up)','stroke-width':2}));
+      svg.appendChild(el('line',{x1:xl,x2:xr,y1:ym,y2:ym,stroke:'var(--up)','stroke-width':2}));
+      const zone=(txt,yy)=>{const t=el('text',{x:xl+pw*0.35+8,y:yy,fill:'var(--fg)','font-size':12,'font-weight':700,stroke:'var(--card)','stroke-width':4,'paint-order':'stroke'},txt);svg.appendChild(t)};
+      if(yb-yt>46){zone('割高ゾーン',(yt+ym)/2+4);zone('割安ゾーン',(ym+yb)/2+4)}
+      if(st.leg_poc!=null){svg.appendChild(el('line',{x1:xl,x2:xr,y1:y(st.leg_poc),y2:y(st.leg_poc),stroke:'var(--fg)','stroke-width':1.5,'stroke-dasharray':'7 5'}))}
+      if(st.range_poc!=null&&st.range_poc>lo&&st.range_poc<hi){svg.appendChild(el('line',{x1:L,x2:right,y1:y(st.range_poc),y2:y(st.range_poc),stroke:'#d4a700','stroke-width':1.5}));
+        svg.appendChild(el('text',{x:L+4,y:y(st.range_poc)+14,fill:'var(--fg)','font-size':11,stroke:'var(--card)','stroke-width':4,'paint-order':'stroke'},'上昇前のレンジのPOC '+fmt(st.range_poc)))}}}
   const w=Math.max(1,Math.min(14,bw*0.7));
   // 出来高（株価とは別の枠。縦軸は共有しない）
   const vTop=H-26-VH,vBot=H-26,vmax=Math.max(...bars.map(b=>b.v),1),vy=v=>vBot-(v/vmax)*VH;

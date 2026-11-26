@@ -11,10 +11,11 @@ from collections import defaultdict, deque
 from datetime import datetime, time
 
 from .bars import JST, SESSIONS, Bar
+from . import fvg
 from .flow import FlowDetector, FlowParams
 from .market import MarketMonitor
-from .patterns import (FLOW_STRATEGY, STRATEGIES, STRATEGY_BY_ID, Params, contiguous_tail,
-                       decline)
+from .patterns import (FLOW_STRATEGY, FVG_STRATEGIES, STRATEGIES, STRATEGY_BY_ID, Params,
+                       contiguous_tail, decline)
 from .risk import RiskManager
 from .settings import TradeSettings
 from .squeeze_log import SqueezeLog
@@ -59,6 +60,11 @@ class PaperEngine:
             SqueezeLog(store, tape_fetcher) if self.flow is not None else None)
         self.notes: dict[tuple[str, str, str], str] = {}
         self.drops: dict[tuple[str, str, str], float | None] = {}
+        # FVGの通知（対象の戦略IDが、有効な戦略か通知対象に入っているものだけ）
+        self.fvg_kinds = {k for k, sid in FVG_STRATEGIES.items()
+                          if sid in ids or (notify_ids is not None and sid in notify_ids)}
+        self.fvg_params = fvg.FvgParams()
+        self.fvg_seen: set[tuple[str, str, str]] = set()   # (銘柄, FVGができた時刻, 種類)。同じFVGは1回だけ
         self.quotes: dict[str, dict] = {}    # 銘柄ごとの最新の受信値（VWAP・前日比・高安など。表示用）
         self.market = market if market is not None else MarketMonitor()   # 地合いの監視
         self.history: dict[str, deque[Bar]] = defaultdict(lambda: deque(maxlen=400))  # 1分足でも当日分が収まる
@@ -104,6 +110,7 @@ class PaperEngine:
         if not bar.complete or bar.start.time() >= self.exit_after or self.in_quiet_open(bar.end):
             return
         window = contiguous_tail(list(h)[-80:])
+        self._check_fvg(bar, h)
         params = replace(self.params, min_drop=self.settings.min_drop_pct / 100)
         drop = decline(window, 2, params)
         drop_pct = None if drop is None else round(drop * 100, 3)
@@ -146,6 +153,31 @@ class PaperEngine:
         p.fut_drop, p.topix_drop = st.mkt_fut_drop, st.mkt_topix_drop
         p.breadth = st.mkt_breadth if st.mkt_breadth > 0 else 101.0   # 0 は「止めない」
         return self.market.state(now.astimezone(JST), self.watchlist)
+
+    def _check_fvg(self, bar: Bar, history) -> None:
+        """足の確定ごとに、FVGの反発・割れを判定して通知する（売買はしない）。"""
+        if not self.fvg_kinds:
+            return
+        sig = fvg.detect(contiguous_tail(list(history)[-200:]), self.fvg_params)
+        if sig is None or sig.kind not in self.fvg_kinds:
+            return
+        key = (bar.symbol, sig.formed.isoformat(), sig.kind)
+        if key in self.fvg_seen:
+            return
+        self.fvg_seen.add(key)
+        sid = FVG_STRATEGIES[sig.kind]
+        name = STRATEGY_BY_ID[sid].name
+        log.info("サイン %s %s %s", name, bar.symbol, sig.note)
+        if (sid, bar.symbol, bar.end.isoformat()) in self.seen:
+            return   # 再起動などで同じ足をもう一度見た場合
+        self.seen.add((sid, bar.symbol, bar.end.isoformat()))
+        if self.notify and (self.notify_ids is None or sid in self.notify_ids):
+            label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
+            self.notify(f"{name}  {label}", f"{bar.end:%H:%M} 終値 {bar.close:,.1f}　{sig.note}", bar.symbol)
+        if self.auto_chart and self.on_auto_chart:
+            self.on_auto_chart(bar.symbol)
+        self.store.add_signal(self.mode, sid, bar.symbol, bar.end, bar.close, sig.bottom, "通知のみ",
+                              sig.note, self.vwap(bar.symbol))
 
     def set_feed(self, ok: bool) -> None:
         """API接続の状態が変わった。切断中は新規の買いを止め、追跡中の検知は欠損として扱う。"""
@@ -304,6 +336,7 @@ class PaperEngine:
         return dict(symbol=symbol, name=self.names.get(symbol),
                     minutes=bars[0].minutes if bars else None,
                     quote=self.quotes.get(symbol),
+                    structure=fvg.structure(contiguous_tail(bars[-200:]), self.fvg_params) if bars else None,
                     bars=[dict(t=b.start.isoformat(), o=b.open, h=b.high, l=b.low, c=b.close,
                                v=b.volume, ok=b.complete, vwap=b.vwap) for b in bars])
 

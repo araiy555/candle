@@ -25,7 +25,7 @@ class Config:
     exit_after: str = "15:20"
     disabled_strategies: list[str] = field(default_factory=list)
     web_port: int = 8765
-    watch_strategies: list[str] = field(default_factory=lambda: ["tweezer_bottom", "squeeze"])
+    watch_strategies: list[str] = field(default_factory=lambda: ["tweezer_bottom", "squeeze", "fvg_hold", "fvg_break"])
     notify_desktop: bool = True
     notify_sound: bool = True
     webhook_url: str = ""
@@ -82,7 +82,7 @@ def load_config(path: str | Path | None = None) -> Config:
         disabled_strategies=list(raw.get("trading", {}).get("disabled_strategies", [])),
         web_port=int(raw.get("web", {}).get("port", 8765)),
         watch_strategies=list(raw.get("notify", {}).get("strategies",
-                                                         ["tweezer_bottom", "squeeze"])),
+                                                         ["tweezer_bottom", "squeeze", "fvg_hold", "fvg_break"])),
         notify_desktop=bool(raw.get("notify", {}).get("desktop", True)),
         notify_sound=bool(raw.get("notify", {}).get("sound", True)),
         webhook_url=str(raw.get("notify", {}).get("webhook_url", "")),
