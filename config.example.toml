@@ -48,7 +48,9 @@ port = 8765                # 管理画面 http://localhost:8765 （このPCか�
 # 通知する戦略ID（squeeze は板と約定の流れ、fvg_hold / fvg_break はFVGの反発・割れ）
 # wall_break は大口の売り板を買いが吸収して突破したとき。wall_approach（売り板への接近）も指定できる
 # liq_sweep は流動性スイープ（押し安値を割って損切りを出させた後に反転）
-strategies = ["tweezer_bottom", "squeeze", "fvg_hold", "fvg_break", "wall_break", "liq_sweep"]
+# open_dip は寄り付き後（9〜10時）の押し目買い（厚い買い板を背に7ティック上を狙う）
+# ※ 通知のオン・オフは管理画面の「通知するサイン」で選ぶ（ここに書いていなくても、画面でオンなら通知する）
+strategies = ["tweezer_bottom", "squeeze", "fvg_hold", "fvg_break", "wall_break", "liq_sweep", "open_dip"]
 desktop = true             # Windowsのデスクトップ通知
 sound = true               # 通知音
 copy_code = true           # 通知と同時に銘柄コードをコピーする（kabuステーションに貼り付け用）

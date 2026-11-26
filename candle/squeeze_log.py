@@ -155,6 +155,12 @@ class SqueezeLog:
         self.active.append(_Active(event_id, sig.symbol, t0, sig.price, t0, sig.price, sig.price))
         return event_id
 
+    def set_metrics(self, event_id: int, metrics: dict) -> None:
+        """検知の後で分かった結果（目標に届いたか など）を書き足す。"""
+        self.conn.execute("UPDATE squeeze_events SET metrics=? WHERE id=?",
+                          (json.dumps(metrics, ensure_ascii=False), event_id))
+        self.conn.commit()
+
     @staticmethod
     def _row(event_id: int, rel: float, t: _Tick) -> tuple:
         return (event_id, round(rel, 3), t.price, t.vol, t.side, t.ask, t.ask_qty, t.bid, t.bid_qty)

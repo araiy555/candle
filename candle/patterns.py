@@ -206,7 +206,12 @@ STRATEGIES: tuple[Strategy, ...] = (
     Strategy("wall_approach", "売り板接近", lambda bars, p: None),
     # 流動性スイープ（sweep.py が判定する）。通知のみ。
     Strategy("liq_sweep", "流動性スイープ", lambda bars, p: None),
+    # 寄り付き後の押し目買い（opening.py が判定する）。通知のみ。
+    Strategy("open_dip", "寄り付き押し目", lambda bars, p: None),
 )
+OPEN_STRATEGY = "open_dip"
+# 管理画面で通知のオン・オフを選べるもの（初期状態はすべてオン）
+NOTIFY_CHOICES = ("tweezer_bottom", "squeeze", "fvg_hold", "fvg_break", "wall_break", "liq_sweep", "open_dip")
 SWEEP_STRATEGY = "liq_sweep"
 WALL_STRATEGIES = {"break": "wall_break", "approach": "wall_approach"}
 FLOW_STRATEGY = "squeeze"

@@ -12,7 +12,7 @@ from datetime import datetime, time as dtime
 
 from .config import Config
 from .engine import PaperEngine
-from .patterns import STRATEGIES
+from .patterns import NOTIFY_CHOICES, STRATEGIES
 from .risk import RiskManager
 from .settings import TradeSettings
 
@@ -150,7 +150,7 @@ class App:
         ids = {s.id for s in STRATEGIES}
         enabled = set(cfg.watch_strategies if mode == "watch" else cfg.trade_strategies) & ids
         common = dict(slippage=cfg.slippage, exit_after=dtime(h, m), enabled=enabled,
-                      notify=self.notify, notify_ids=set(cfg.watch_strategies),
+                      notify=self.notify, notify_ids=set(cfg.watch_strategies) | set(NOTIFY_CHOICES),
                       settings=TradeSettings.load(cfg.data_dir / "settings.json"),
                       squeeze_log=old.squeeze_log if old is not None else None,
                       market=old.market if old is not None else None,
@@ -180,6 +180,8 @@ class App:
                 engine.flow = old.flow   # 直近の約定の流れも引き継ぐ
             if engine.walls is not None and old.walls is not None:
                 engine.walls = old.walls   # 追跡中の売り板も引き継ぐ
+            if engine.opening is not None and old.opening is not None:
+                engine.opening, engine.open_active = old.opening, old.open_active
             engine.last_tick, engine.last_bar = old.last_tick, old.last_bar
             engine.warnings.update(self.problems)
             engine.snapshot = {}

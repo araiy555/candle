@@ -11,10 +11,10 @@ from collections import defaultdict, deque
 from datetime import datetime, time
 
 from .bars import JST, SESSIONS, Bar
-from . import fvg, sweep
+from . import fvg, opening, sweep
 from .flow import FlowDetector, FlowParams
 from .market import MarketMonitor
-from .patterns import (FLOW_STRATEGY, FVG_STRATEGIES, STRATEGIES, STRATEGY_BY_ID, SWEEP_STRATEGY,
+from .patterns import (FLOW_STRATEGY, FVG_STRATEGIES, OPEN_STRATEGY, STRATEGIES, STRATEGY_BY_ID, SWEEP_STRATEGY,
                        WALL_STRATEGIES, Params, contiguous_tail, decline)
 from .wall import WallTracker
 from .risk import RiskManager
@@ -61,7 +61,11 @@ class PaperEngine:
         self.sweep_params = sweep.SweepParams()
         self.sweep_seen: set[tuple[str, str]] = set()      # (銘柄, 押し安値の時刻)。同じプールは1回だけ
         self.last_msg: dict[str, dict] = {}                # 銘柄ごとの最新の配信（記録に板などを残すため）
-        want_flow = FLOW_STRATEGY in wanted or self.walls is not None or self.sweep_on
+        # 寄り付き後の押し目買い（厚い買い板を背に、数ティック上を狙う）。通知と記録のみ
+        self.opening = opening.OpenTracker() if OPEN_STRATEGY in wanted else None
+        self.open_active: list[dict] = []                  # 目標・損切りのどちらに先に届くかを見ている検知
+        want_flow = (FLOW_STRATEGY in wanted or self.walls is not None or self.sweep_on
+                     or self.opening is not None)
         self.flow_notify = FLOW_STRATEGY in wanted   # スクイーズそのものを通知・記録するか
         self.flow = FlowDetector(flow_params) if want_flow else None
         self.flow_trades = FLOW_STRATEGY in ids      # スクイーズで売買もするか（通知だけなら False）
@@ -137,7 +141,7 @@ class PaperEngine:
                 continue
             self.seen.add(key)
             log.info("サイン %s %s %s 安値%s", s.name, bar.symbol, bar.end.strftime("%H:%M"), low)
-            if self.notify and (self.notify_ids is None or s.id in self.notify_ids):
+            if self.notify and self._wants(s.id):
                 label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
                 self.notify(f"{s.name}  {label}",
                             f"{bar.end:%H:%M} 終値 {bar.close:,.1f} / パターン安値 {low:,.1f}",
@@ -150,6 +154,11 @@ class PaperEngine:
             else:
                 self._signal(self.mode, s.id, bar.symbol, bar.end, bar.close, low, "通知のみ",
                                       vwap=self.vwap(bar.symbol), drop_pct=drop_pct)
+
+    def _wants(self, strategy_id: str) -> bool:
+        """このサインを通知するか（起動時の対象に入っていて、管理画面でオンになっているもの）。"""
+        return ((self.notify_ids is None or strategy_id in self.notify_ids)
+                and self.settings.notifies(strategy_id))
 
     def in_quiet_open(self, ts: datetime) -> bool:
         """寄り付き直後の、サインを出さない時間帯か。値動きが荒く、サインが出すぎるため。"""
@@ -196,7 +205,7 @@ class PaperEngine:
                 # 突破だけでなく、取消で消えた・跳ね返された場合も、比較のためにすべて残す
                 self.squeeze_log.on_signal(ev, msg, self.names.get(symbol), kind="wall")
             sid = WALL_STRATEGIES.get(ev.kind)
-            if sid is None or not (self.notify_ids is None or sid in self.notify_ids):
+            if sid is None or not self._wants(sid):
                 continue
             key = (sid, symbol, ev.time.isoformat())
             if key in self.seen:
@@ -211,6 +220,48 @@ class PaperEngine:
                 self.on_auto_chart(symbol)
             self._signal(self.mode, sid, symbol, ev.time, ev.price, ev.wall.price, "通知のみ",
                                   ev.note, self.vwap(symbol))
+
+    def _check_opening(self, symbol: str, msg: dict, now: datetime) -> None:
+        """寄り付き後の押し目買いを判定して通知・記録し、目標と損切りのどちらに先に届いたかを残す。
+
+        寄り付き直後を狙うものなので、「寄り付き後に待つ時間」の対象にはしない。
+        """
+        if self.opening is None:
+            return
+        now = now.astimezone(JST)
+        price = msg.get("CurrentPrice")
+        for a in list(self.open_active):
+            if a["symbol"] != symbol or price is None:
+                continue
+            secs = (now - a["time"]).total_seconds()
+            result = ("target" if price >= a["metrics"]["target"] else
+                      "stop" if price <= a["metrics"]["stop"] else
+                      "timeout" if secs >= self.opening.p.timeout else None)
+            if result:
+                self.open_active.remove(a)
+                a["metrics"].update(outcome=result, outcome_label=opening.RESULTS[result],
+                                    result_seconds=round(secs, 1))
+                if self.squeeze_log is not None:
+                    self.squeeze_log.set_metrics(a["id"], a["metrics"])
+        if not self._wants(OPEN_STRATEGY):
+            return
+        sig = self.opening.update(symbol, msg, now)
+        key = (OPEN_STRATEGY, symbol, now.isoformat())
+        if sig is None or key in self.seen:
+            return
+        self.seen.add(key)
+        name = STRATEGY_BY_ID[OPEN_STRATEGY].name
+        log.info("サイン %s %s %s", name, symbol, sig.note)
+        if self.squeeze_log is not None:
+            event_id = self.squeeze_log.on_signal(sig, msg, self.names.get(symbol), kind="open")
+            self.open_active.append(dict(id=event_id, symbol=symbol, time=now, metrics=sig.metrics))
+        if self.notify:
+            label = f"{symbol} {self.names.get(symbol) or ''}".strip()
+            self.notify(f"{name}  {label}", f"{now:%H:%M:%S} {sig.note}", symbol)
+        if self.auto_chart and self.on_auto_chart:
+            self.on_auto_chart(symbol)
+        self._signal(self.mode, OPEN_STRATEGY, symbol, now, sig.price, sig.low, "通知のみ",
+                     sig.note, self.vwap(symbol))
 
     def _check_sweep(self, bar: Bar, history) -> None:
         """足の確定ごとに、流動性スイープ（押し安値を割って反転）を判定して通知・記録する。"""
@@ -229,7 +280,7 @@ class PaperEngine:
         if self.squeeze_log is not None:
             self.squeeze_log.on_signal(sig, self.last_msg.get(bar.symbol, {}), self.names.get(bar.symbol),
                                        kind="sweep")
-        if self.notify and (self.notify_ids is None or SWEEP_STRATEGY in self.notify_ids):
+        if self.notify and self._wants(SWEEP_STRATEGY):
             label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
             self.notify(f"{name}  {label}", f"{bar.end:%H:%M} {sig.note}", bar.symbol)
         if self.auto_chart and self.on_auto_chart:
@@ -254,7 +305,7 @@ class PaperEngine:
         if (sid, bar.symbol, bar.end.isoformat()) in self.seen:
             return   # 再起動などで同じ足をもう一度見た場合
         self.seen.add((sid, bar.symbol, bar.end.isoformat()))
-        if self.notify and (self.notify_ids is None or sid in self.notify_ids):
+        if self.notify and self._wants(sid):
             label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
             self.notify(f"{name}  {label}", f"{bar.end:%H:%M} 終値 {bar.close:,.1f}　{sig.note}", bar.symbol)
         if self.auto_chart and self.on_auto_chart:
@@ -297,6 +348,7 @@ class PaperEngine:
         if cheap:
             return
         self._check_walls(symbol, msg, now)
+        self._check_opening(symbol, msg, now)
         if (sig is None or not self.flow_notify or now.astimezone(JST).time() >= self.exit_after
                 or self.in_quiet_open(now)):
             return
@@ -308,7 +360,7 @@ class PaperEngine:
         log.info("サイン %s %s %s", name, symbol, sig.note)
         if self.squeeze_log is not None:
             self.squeeze_log.on_signal(sig, msg, self.names.get(symbol))
-        if self.notify and (self.notify_ids is None or FLOW_STRATEGY in self.notify_ids):
+        if self.notify and self._wants(FLOW_STRATEGY):
             label = f"{symbol} {self.names.get(symbol) or ''}".strip()
             self.notify(f"{name}  {label}", f"{sig.time:%H:%M:%S} {sig.price:,.1f}円　{sig.note}", symbol)
         if self.auto_chart and self.on_auto_chart:

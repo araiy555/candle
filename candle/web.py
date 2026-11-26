@@ -50,7 +50,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 </style></head><body>
 <header><h1>candle</h1><span class="pill" id="mode"></span><span class="seg" id="modes" hidden><button data-mode="watch">通知のみ</button><button data-mode="paper">テスト</button><button data-mode="live">本番</button></span><span class="pill" id="feed"></span>
 <span class="pill" id="halt"></span><span class="mut" id="time"></span>
-<a href="/squeeze" style="color:var(--acc);font-size:13px">検知履歴（スクイーズ・売り板・流動性スイープ）</a>
+<a href="/squeeze" style="color:var(--acc);font-size:13px">検知履歴（スクイーズ・売り板・流動性スイープ・寄り付き押し目）</a>
 <label class="pill" style="cursor:pointer"><input type="checkbox" id="auto" style="vertical-align:-2px"> サインが出たらkabuステーションのチャートを自動で切り替える</label>
 <span style="flex:1"></span><button id="closeall" hidden>全ポジションを決済</button><button id="btn"></button></header>
 <main>
@@ -74,6 +74,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <div><label for="mkt_topix_drop">地合い：TOPIXも5分でこの%以上下げたら「警戒強化」</label><div class="row"><input id="mkt_topix_drop" type="number" step="0.05" min="0" style="width:100%"></div></div>
 <div><label for="mkt_breadth">地合い：監視銘柄のこの%以上が下落で新規買い停止　0＝止めない</label><div class="row"><input id="mkt_breadth" type="number" step="5" min="0" max="100" style="width:100%"></div></div>
 <div><label for="max_hold_min">最大保有時間（分）　0＝時間では決済しない</label><div class="row"><input id="max_hold_min" type="number" step="1" min="0" style="width:100%"></div></div>
+<div style="grid-column:1/-1"><label>通知するサイン</label><div><label style="display:inline-flex;gap:4px;align-items:center;margin:0 12px 4px 0;font-size:13px;color:inherit"><input type="checkbox" class="nt" style="width:auto;flex:none;margin:0" value="tweezer_bottom">毛抜き底</label><label style="display:inline-flex;gap:4px;align-items:center;margin:0 12px 4px 0;font-size:13px;color:inherit"><input type="checkbox" class="nt" style="width:auto;flex:none;margin:0" value="squeeze">スクイーズ</label><label style="display:inline-flex;gap:4px;align-items:center;margin:0 12px 4px 0;font-size:13px;color:inherit"><input type="checkbox" class="nt" style="width:auto;flex:none;margin:0" value="fvg_hold">FVG反発</label><label style="display:inline-flex;gap:4px;align-items:center;margin:0 12px 4px 0;font-size:13px;color:inherit"><input type="checkbox" class="nt" style="width:auto;flex:none;margin:0" value="fvg_break">FVG割れ</label><label style="display:inline-flex;gap:4px;align-items:center;margin:0 12px 4px 0;font-size:13px;color:inherit"><input type="checkbox" class="nt" style="width:auto;flex:none;margin:0" value="wall_break">売り板突破</label><label style="display:inline-flex;gap:4px;align-items:center;margin:0 12px 4px 0;font-size:13px;color:inherit"><input type="checkbox" class="nt" style="width:auto;flex:none;margin:0" value="liq_sweep">流動性スイープ</label><label style="display:inline-flex;gap:4px;align-items:center;margin:0 12px 4px 0;font-size:13px;color:inherit"><input type="checkbox" class="nt" style="width:auto;flex:none;margin:0" value="open_dip">寄り付き押し目（9〜10時）</label></div><input id="notify_on" type="hidden"></div>
 <div><div class="row" style="align-items:center"><button id="save">設定を保存</button><span class="mut" id="savemsg" style="font-size:12px"></span></div></div>
 </div><div id="example" style="margin-top:12px;font-size:13px"></div><div class="note" style="padding:10px 0 0">損切り・トレーリング・金額の上限は、テストと本番の売買に使います（次の買いから適用。保有中の分は買った時点の設定のまま）。寄り付き後に待つ時間は、通知のみのモードでも効きます。</div></section>
 <section data-trade><h2>保有ポジション</h2><div id="positions"></div></section>
@@ -104,7 +105,7 @@ function table(el,heads,rows,empty){
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
 let halted=false,state=null,cur=null,formLoaded=false;const closing=new Set();
-const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_price','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth'];
+const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_price','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth','notify_on'];
 function vdiff(price,vwap){if(price==null||!vwap)return '<span class="mut">-</span>';const d=(price-vwap)/vwap*100;return `<span class="${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${n(d,2)}%</span>`}
 function vcell(price,vwap){return vwap?`${n(vwap,1)} <span style="font-size:12px">(${vdiff(price,vwap)})</span>`:'<span class="mut">-</span>'}
 const rng=v=>v==null?'<span class="mut">-</span>':n(v,2)+'%';
@@ -140,7 +141,7 @@ async function load(){
       `<div><span>下落している監視銘柄（${n(mk.window_min,0)}分前より安い）</span><b>${b.available?`<span class="${b.falling?'ng':''}">${n(b.pct,0)}%</span> <span class="mut" style="font-size:13px">（${b.down} / ${b.total}銘柄）</span>`:'<span class="mut" style="font-size:13px">判定できません</span>'}</b><span>${b.available?(mk.thresholds.breadth>100?'停止の基準なし':`基準 ${n(mk.thresholds.breadth,0)}%以上で新規買い停止`):esc(b.reason||'')}</span></div></div>`+
       '<div class="note" style="padding:8px 0 0">先物が急落＝警戒、加えてTOPIXも下落＝警戒強化、監視銘柄の下落が基準以上＝新規買い停止。買いを止めるのは「新規買い停止」のときだけです。保有中の損切り・決済は通常どおり行います。</div>'}
   $('warn').hidden=!(d.warnings&&d.warnings.length);$('warnlist').innerHTML=(d.warnings||[]).map(w=>`<li>${esc(w)}</li>`).join('');
-  if(!formLoaded&&d.settings){for(const k of FIELDS)$(k).value=d.settings[k];formLoaded=true;syncForm()}
+  if(!formLoaded&&d.settings){for(const k of FIELDS)$(k).value=d.settings[k];const on=(d.settings.notify_on||'').split(',');document.querySelectorAll('.nt').forEach(c=>c.checked=on.includes(c.value));formLoaded=true;syncForm()}
   $('mode').textContent=d.mode;$('time').textContent=md(d.time)+' 更新';
   $('feed').innerHTML=d.feed_ok?'<span class="ok">API接続中</span>':'<span class="ng">API切断（新規停止）</span>';
   $('halt').innerHTML=d.halted?'<span class="ng">緊急停止中</span>':'<span class="ok">新規受付中</span>';
@@ -259,7 +260,7 @@ document.querySelectorAll('#modes button').forEach(b=>b.onclick=async()=>{const 
   try{const r=await (await fetch('/api/mode?m='+m,{method:'POST'})).json();if(!r.ok)alert(r.message)}catch(e){alert('切り替えできませんでした')}load()});
 $('stop_mode').onchange=$('trail_mode').onchange=$('size_mode').onchange=syncForm;
 $('stop_value').oninput=$('trail_value').oninput=example;
-$('save').onclick=async()=>{const body={};for(const k of FIELDS)body[k]=$(k).value;
+$('save').onclick=async()=>{$('notify_on').value=[...document.querySelectorAll('.nt')].filter(c=>c.checked).map(c=>c.value).join(',');const body={};for(const k of FIELDS)body[k]=$(k).value;
   try{const r=await (await fetch('/api/settings',{method:'POST',body:JSON.stringify(body)})).json();$('savemsg').textContent=r.message;if(r.ok)formLoaded=false}catch(e){$('savemsg').textContent='保存できませんでした'}};
 $('closeall').onclick=async()=>{if(!confirm('保有中のすべてのポジションを成行で決済します。よろしいですか？'))return;await fetch('/api/close-all',{method:'POST'});load()};
 $('auto').onchange=()=>fetch('/api/auto-chart?on='+($('auto').checked?1:0),{method:'POST'});
@@ -310,7 +311,7 @@ def start_web(target, port: int = 8765, data_dir=None, db_path=None) -> Threadin
                 ok = lambda v: v is None or (len(v) == 10 and v.replace("-", "").isdigit())
                 if not (ok(day("from")) and ok(day("to"))):
                     return self._send(b"bad date", "text/plain", 400)
-                kind = day("kind") if day("kind") in ("squeeze", "wall", "sweep") else "squeeze"
+                kind = day("kind") if day("kind") in ("squeeze", "wall", "sweep", "open") else "squeeze"
                 outcome = day("outcome") if day("outcome") in ("break", "pulled", "rejected") else None
                 res = squeeze_web.list_events(db_path, day("from"), day("to"), kind, outcome)
                 self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"), "application/json")

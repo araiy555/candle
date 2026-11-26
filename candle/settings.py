@@ -25,6 +25,8 @@ class TradeSettings:
     max_hold_min: float = 0          # 最大保有時間（分）。0なら時間では決済しない
     quiet_open_min: float = 15       # 寄り付き（9:00）からこの分数は、通知も売買もしない
     min_price: float = 500           # 株価の下限（円）。これより安い銘柄は通知も売買もしない。0なら除かない
+    # 通知するサイン（戦略IDをカンマ区切り）。管理画面のチェックで選ぶ
+    notify_on: str = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip"
     min_drop_pct: float = 0.3        # 直前の下落率の下限（%）。横ばいの中のサインを除く。0なら除かない
     mkt_fut_drop: float = 0.3        # 地合い: 先物が5分でこの%以上下げたら「警戒」
     mkt_topix_drop: float = 0.15     # 地合い: 加えてTOPIXが5分でこの%以上下げたら「警戒強化」
@@ -63,6 +65,9 @@ class TradeSettings:
             raise ValueError("金額は0より大きくしてください")
         if self.per_trade_cap > self.total_cap:
             raise ValueError("1回の上限は、合計の上限以下にしてください")
+
+    def notifies(self, strategy_id: str) -> bool:
+        return strategy_id in self.notify_on.split(",")
 
     def initial_stop(self, entry: float, pattern_low: float) -> float:
         """買値とパターン安値から初期の損切りラインを決める。"""
