@@ -36,6 +36,7 @@ class App:
         self._tape_lock = threading.Lock()
         self.wallet: tuple[float | None, str] = (None, "未取得")   # (信用新規可能額, 状況)
         self._wallet_at: datetime | None = None
+        self._wallet_wait = 60.0      # 次に余力を取りに行くまでの秒数
 
     # --- 受信側（collector）から呼ばれる ---------------------------------------
     def setup(self, store) -> None:
@@ -121,7 +122,7 @@ class App:
 
     def _refresh_wallet(self, now: datetime) -> None:
         """信用の買付余力を1分ごとに取得する（受信を止めないよう別スレッドで）。"""
-        if self.client is None or (self._wallet_at and (now - self._wallet_at).total_seconds() < 60):
+        if self.client is None or (self._wallet_at and (now - self._wallet_at).total_seconds() < self._wallet_wait):
             return
         self._wallet_at = now
 
@@ -130,8 +131,12 @@ class App:
                 value = client.wallet_margin()
                 self.wallet = (value, f"{now:%H:%M} 取得") if value is not None else \
                     (None, "応答に金額が含まれていません")
+                self._wallet_wait = 60
             except Exception as e:
-                self.wallet = (None, f"取得できません（{e}）")
+                # 失敗のたびにトークンを取り直すことになるので、次に試すまで30分あける
+                self._wallet_wait = 1800
+                hint = "信用口座が無いか、kabuステーション側で余力を取得できない状態です。" if "401" in str(e) else ""
+                self.wallet = (None, f"取得できません。{hint}30分後にもう一度試します（{e}）")
 
         threading.Thread(target=work, daemon=True).start()
 
