@@ -28,6 +28,7 @@ class SweepParams:
     max_depth: float = 0.01      # 割り込みがこれより深い場合は対象外（急落であって、狩りではない）
     vol_avg: int = 10
     vol_mult: float = 2.0        # 平均の何倍で「出来高が増えた」とみなすか
+    major: int = 10              # 外部流動性とみなす大きな波：左右この本数の中で一番安い（高い）
     bos_lookback: int = 60       # 高値ブレイクと、直近の上昇を探す本数
     min_leg: float = 0.004       # 上昇とみなす最小の値幅（安値比）
 
@@ -60,7 +61,7 @@ def pools(bars: Sequence[Bar], p: SweepParams | None = None, upto: int | None = 
     return out
 
 
-def liquidity_levels(bars: Sequence[Bar], p: SweepParams | None = None, major: int = 10,
+def liquidity_levels(bars: Sequence[Bar], p: SweepParams | None = None, major: int | None = None,
                      max_internal: int = 3) -> list[dict]:
     """チャートに表示する流動性（損切りがたまりやすい価格）。まだ抜かれていない高値と安値。
 
@@ -72,6 +73,7 @@ def liquidity_levels(bars: Sequence[Bar], p: SweepParams | None = None, major: i
     内部流動性は数が多くなるので、今の株価に近いものから上下 max_internal 本ずつに絞る。
     """
     p = p or SweepParams()
+    major = major or p.major
     n = len(bars)
     if n < p.pivot * 2 + 1:
         return []
@@ -140,8 +142,11 @@ def context(bars: Sequence[Bar], s: int, i: int, level: float, low: float, p: Sw
     if leg_low > 0 and (leg_high - leg_low) / leg_low >= p.min_leg:
         mid = (leg_low + leg_high) / 2
         zone = "below" if low < leg_low else "discount" if low < mid else "premium"
-    out = dict(after_bos=after_bos, zone=zone, liquidity="external" if level <= day_low else "internal",
-               leg_low=leg_low, leg_high=leg_high, bos_setup=after_bos and zone == "discount" and level > day_low)
+    # 外部流動性: 当日安値、または左右 major 本の中で一番安い大きな波の安値（チャートの表示と同じ決め方）
+    big = i >= p.major and not any(bars[j].low < level for j in range(i - p.major, min(s, i + p.major + 1)) if j != i)
+    ext = "当日安値" if level <= day_low else "大きな波の安値" if big else None
+    out = dict(after_bos=after_bos, zone=zone, liquidity="external" if ext else "internal", ext_kind=ext,
+               leg_low=leg_low, leg_high=leg_high, bos_setup=after_bos and zone == "discount" and not ext)
     if bos:
         out.update(bos_level=bos["bos_level"], bos_time=bos["bos_time"], bos_volume_ratio=bos["bos_volume_ratio"])
     return out
@@ -160,8 +165,8 @@ def context_conditions(c: dict) -> list:
         dict(key="zone", label="割安ゾーン", ok=c["zone"] == "discount",
              text=f"直近の上昇 {c['leg_low']:,.1f}〜{c['leg_high']:,.1f}円の中で、{ZONES[c['zone']]}。"),
         dict(key="liquidity", label="内部流動性", ok=c["liquidity"] == "internal",
-             text="当日安値より上の押し安値を割った（内部流動性）。" if c["liquidity"] == "internal"
-             else "当日安値を割った（外部流動性）。"),
+             text="大きな波の内側にできた、小さな波の押し安値を割った（内部流動性）。" if c["liquidity"] == "internal"
+             else f"{c.get('ext_kind') or '外部の安値'}を割った（外部流動性）。"),
     ]
 
 

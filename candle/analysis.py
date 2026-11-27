@@ -145,7 +145,7 @@ SIGNAL_KINDS = [
     ("sweep", SWEEP_TAG(zone="discount"), "　└ 割安ゾーン", 1),
     ("sweep", SWEEP_TAG(zone="premium"), "　└ 割高ゾーン", 1),
     ("sweep", SWEEP_TAG(liquidity="internal"), "　└ 内部流動性", 1),
-    ("sweep", SWEEP_TAG(liquidity="external"), "　└ 外部流動性（当日安値）", 1),
+    ("sweep", SWEEP_TAG(liquidity="external"), "　└ 外部流動性（当日安値・大きな波の安値・前日安値）", 1),
     ("open", None, "寄り付き押し目", 1),
     ("fvg", SWEEP_TAG(outcome="hold"), "FVG反発", 1),
     ("fvg", SWEEP_TAG(outcome="break"), "FVG割れ（下がれば見込みどおり）", -1),

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from . import fvg, mtf, opening, sweep
 from .flow import FlowDetector, FlowParams
 from .market import MarketMonitor
-from .patterns import (BOS_STRATEGY, FLOW_STRATEGY, FVG_STRATEGIES, OPEN_STRATEGY, STRATEGIES, STRATEGY_BY_ID, SWEEP_STRATEGY,
+from .patterns import (BOS_STRATEGY, EXT_STRATEGY, FLOW_STRATEGY, FVG_STRATEGIES, OPEN_STRATEGY, STRATEGIES, STRATEGY_BY_ID, SWEEP_STRATEGY,
                        WALL_STRATEGIES, Params, contiguous_tail, decline)
 from .wall import WallTracker
 from .risk import RiskManager
@@ -59,7 +59,7 @@ class PaperEngine:
         wanted = ids | (notify_ids or set())
         # 大口の売り板の観察（約定の向きと出来高の差分が要るので、スクイーズの検出器と一緒に動かす）
         self.walls = WallTracker() if wanted & set(WALL_STRATEGIES.values()) else None
-        self.sweep_on = SWEEP_STRATEGY in wanted or BOS_STRATEGY in wanted
+        self.sweep_on = bool(wanted & {SWEEP_STRATEGY, BOS_STRATEGY, EXT_STRATEGY})
         self.sweep_params = sweep.SweepParams()
         self.sweep_seen: set[tuple[str, str]] = set()      # (銘柄, 押し安値の時刻)。同じプールは1回だけ
         self.last_msg: dict[str, dict] = {}                # 銘柄ごとの最新の配信（記録に板などを残すため）
@@ -316,10 +316,20 @@ class PaperEngine:
         sig = sweep.detect(contiguous_tail(list(history)[-200:]), self.sweep_params)
         if sig is None:
             return
-        sid = BOS_STRATEGY if sig.metrics.get("bos_setup") and self._wants(BOS_STRATEGY) else SWEEP_STRATEGY
+        m, prev = sig.metrics, self.prev_days.get(bar.symbol)
+        if prev and prev.get("low") and sig.low < prev["low"] <= bar.close:
+            # 前日安値も割って戻した（上位足の外部流動性）
+            m.update(liquidity="external", ext_kind="前日安値", bos_setup=False, prev_low=prev["low"])
+            sig.note += f"（前日安値 {prev['low']:,.1f} も割って回復）"
+        if m.get("liquidity") == "external":
+            sig.note = f"外部流動性（{m.get('ext_kind')}）：" + sig.note
+        elif m.get("liquidity") == "internal":
+            sig.note = "内部流動性：" + sig.note
+        sid = (BOS_STRATEGY if m.get("bos_setup") and self._wants(BOS_STRATEGY) else
+               EXT_STRATEGY if m.get("liquidity") == "external" and self._wants(EXT_STRATEGY) else SWEEP_STRATEGY)
         key = (bar.symbol, sig.level_time.isoformat())
         if key in self.sweep_seen or any((x, bar.symbol, bar.end.isoformat()) in self.seen
-                                         for x in (SWEEP_STRATEGY, BOS_STRATEGY)):
+                                         for x in (SWEEP_STRATEGY, BOS_STRATEGY, EXT_STRATEGY)):
             return
         self.sweep_seen.add(key)
         self.seen.add((sid, bar.symbol, bar.end.isoformat()))

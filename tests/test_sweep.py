@@ -135,7 +135,7 @@ def test_engine_notifies_bos_dip_and_keeps_plain_sweep_separate(tmp_path):
 def test_new_signal_is_added_to_saved_settings():
     from candle.settings import TradeSettings
     old = TradeSettings.from_dict({"notify_on": "tweezer_bottom,liq_sweep"})     # 旧版で保存した設定
-    assert old.notify_on == "tweezer_bottom,liq_sweep,bos_dip"                   # 後から増えたサインはオンで加わる
+    assert old.notify_on == "tweezer_bottom,liq_sweep,bos_dip,ext_liq"                   # 後から増えたサインはオンで加わる
     again = TradeSettings.from_dict({"notify_on": "tweezer_bottom", "notify_seen": old.notify_seen})
     assert again.notify_on == "tweezer_bottom"                                   # 画面で外したものは戻さない
 
@@ -155,3 +155,30 @@ def test_liquidity_levels_external_and_internal():
     assert lv[("low", 1018)] == "internal" and lv[("high", 1033)] == "internal"   # 内側の小さな波
     assert all(k in ("external", "internal") for k in lv.values())
     assert liquidity_levels(bars[:3]) == []
+
+
+def test_engine_notifies_external_liquidity_break(tmp_path):
+    from candle import squeeze_web
+    from candle.engine import PaperEngine
+    from candle.risk import RiskLimits, RiskManager
+    from candle.store import Store
+
+    def run(sub, rows, prev_low=None):
+        store, sent = Store(tmp_path / f"{sub}.sqlite"), []
+        e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"}, trade_enabled=False,
+                        notify=lambda *a: sent.append(a), notify_ids={"liq_sweep", "bos_dip", "ext_liq"})
+        if prev_low:
+            e.prev_days["5803"] = dict(day="2026-11-23", high=9999, low=prev_low, close=prev_low + 50)
+        for b in bars_from(rows, symbol="5803"):
+            e.on_bar(b)
+        (ev,) = squeeze_web.list_events(tmp_path / f"{sub}.sqlite", kind="sweep")["events"]
+        return sent, store, ev["metrics"]
+
+    sent, store, m = run("a", BASE + [(4942, 4945, 4915, 4944, 12000)])        # 当日安値 4,930 を割って戻す
+    assert [a[0] for a in sent] == ["外部流動性ブレイク  5803"] and "外部流動性（当日安値）" in sent[0][1]
+    assert store.recent_signals("paper")[0]["strategy_id"] == "ext_liq" and m["ext_kind"] == "当日安値"
+    sent, _, m = run("b", BOS + SWEEP)                                          # 内部流動性はこちらでは鳴らさない
+    assert [a[0] for a in sent] == ["内部流動性ブレイク  5803"] and m["liquidity"] == "internal"
+    sent, _, m = run("c", BOS + SWEEP, prev_low=1017)                           # 前日安値も割って戻した
+    assert [a[0] for a in sent] == ["外部流動性ブレイク  5803"] and "前日安値 1,017.0" in sent[0][1]
+    assert (m["liquidity"], m["ext_kind"], m["bos_setup"], m["prev_low"]) == ("external", "前日安値", False, 1017)

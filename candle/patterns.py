@@ -210,11 +210,14 @@ STRATEGIES: tuple[Strategy, ...] = (
     Strategy("open_dip", "寄り付き押し目", lambda bars, p: None),
     # 高値ブレイクの後、割安ゾーンで内部流動性を刈って戻した形（sweep.py が判定する）。通知のみ。
     Strategy("bos_dip", "内部流動性ブレイク", lambda bars, p: None),
+    # 下の外部流動性（当日安値・大きな波の安値・前日安値）を割って戻した形（sweep.py が判定する）。通知のみ。
+    Strategy("ext_liq", "外部流動性ブレイク", lambda bars, p: None),
 )
+EXT_STRATEGY = "ext_liq"
 BOS_STRATEGY = "bos_dip"
 OPEN_STRATEGY = "open_dip"
 # 管理画面で通知のオン・オフを選べるもの（初期状態はすべてオン）
-NOTIFY_CHOICES = ("tweezer_bottom", "squeeze", "fvg_hold", "fvg_break", "wall_break", "liq_sweep", "open_dip", "bos_dip")
+NOTIFY_CHOICES = ("tweezer_bottom", "squeeze", "fvg_hold", "fvg_break", "wall_break", "liq_sweep", "open_dip", "bos_dip", "ext_liq")
 SWEEP_STRATEGY = "liq_sweep"
 WALL_STRATEGIES = {"break": "wall_break", "approach": "wall_approach"}
 FLOW_STRATEGY = "squeeze"
