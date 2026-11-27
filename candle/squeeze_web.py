@@ -123,6 +123,26 @@ def list_events(db_path, date_from: str | None = None, date_to: str | None = Non
                 kind=kind, outcomes=counts)
 
 
+def _bars(db_path, symbol: str, time_iso: str, before: int = 90, after: int = 40) -> tuple[list, int | None]:
+    """検知の前後のローソク足（保存済みの足から。検知の前 before 本・後 after 本）。無ければ空。"""
+    day = time_iso[:10]
+    try:
+        with _connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT minutes, start, open, high, low, close, volume, complete FROM bars "
+                "WHERE symbol=? AND substr(start,1,10)=? AND minutes=(SELECT MIN(minutes) FROM bars "
+                "WHERE symbol=? AND substr(start,1,10)=?) ORDER BY start", (symbol, day, symbol, day)).fetchall()
+    except sqlite3.OperationalError:
+        return [], None
+    if not rows:
+        return [], None
+    at = datetime.fromisoformat(time_iso)
+    idx = sum(1 for r in rows if datetime.fromisoformat(r["start"]) < at)   # 検知より前に始まった足の数
+    part = rows[max(0, idx - before):idx + after]
+    return ([dict(t=r["start"], o=r["open"], h=r["high"], l=r["low"], c=r["close"], v=r["volume"],
+                  ok=bool(r["complete"])) for r in part], rows[0]["minutes"])
+
+
 def get_event(db_path, event_id: int) -> dict | None:
     if not db_path:
         return None
@@ -137,6 +157,7 @@ def get_event(db_path, event_id: int) -> dict | None:
     except sqlite3.OperationalError:
         return None
     out = _summary(r)
+    out["bars"], out["bar_minutes"] = _bars(db_path, r["symbol"], r["time"])
     out["board"] = json.loads(r["board"]) if r["board"] else None
     out["tape"] = json.loads(r["tape"]) if r["tape"] else None
     out["ticks"] = ticks
@@ -186,6 +207,7 @@ button{cursor:pointer}.kpis{display:flex;flex-wrap:wrap;gap:22px}.kpis>div>span{
 <section id="dwarn" hidden></section>
 <section><h2>検知時の情報</h2><div class="kpis" id="dkpis"></div></section>
 <section><h2>検知条件</h2><div id="dconds"></div></section>
+<section><h2>チャート（検知の前後のローソク足）</h2><div class="chart"><svg id="candles" height="380" role="img"></svg><div class="tip" id="ctip"></div></div><div class="note" id="candlenote"></div></section>
 <section><h2>検知後の株価</h2><div id="dhor"></div></section>
 <section><h2>株価の推移（検知前60秒〜検知後5分）</h2><div class="legend"><span><i></i>約定値</span><span><i style="border-top:1px dashed var(--mut)"></i>最良売り気配</span><span><i style="border-top:1px dotted var(--mut)"></i>最良買い気配</span></div>
 <div class="chart"><svg id="chart" height="320" role="img"></svg><div class="tip" id="tip"></div></div><div class="note" id="chartnote"></div></section>
@@ -261,6 +283,47 @@ async function loadList(){
 const NS='http://www.w3.org/2000/svg';
 function el(tag,attrs,text){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(text!=null)e.textContent=text;return e}
 function ticks(lo,hi,count){const raw=(hi-lo)/count||1,p=Math.pow(10,Math.floor(Math.log10(raw))),f=raw/p,step=(f<1.5?1:f<3?2:f<7?5:10)*p,out=[];for(let v=Math.ceil(lo/step)*step;v<=hi+1e-9;v+=step)out.push(v);return out}
+function drawCandles(e){
+  const svg=$('candles'),tip=$('ctip'),bars=e.bars||[],m=e.metrics||{};svg.innerHTML='';tip.style.display='none';
+  const W=svg.clientWidth||1000,Ht=380,L=10,R=70,T=16,VH=60,B=26+VH+10;svg.setAttribute('viewBox',`0 0 ${W} ${Ht}`);
+  if(!bars.length){svg.appendChild(el('text',{x:W/2,y:Ht/2,'text-anchor':'middle',fill:'var(--warn)','font-size':13},'この日のローソク足は保存されていません'));$('candlenote').textContent='';return}
+  // 種類ごとの目印（価格の線）
+  const lines=[];const add=(v,label,col,dash)=>{if(v!=null)lines.push({v,label,col,dash})};
+  if(e.kind==='fvg'){add(m.poc,'POC','#d4a700');add(m.pullback_low,'押しの安値','var(--mut)','3 3')}
+  else if(e.kind==='sweep'){add(m.level,'押し安値（流動性プール）','var(--warn)');add(m.sweep_low,'割り込んだ安値','var(--mut)','3 3')}
+  else if(e.kind==='open'){add(m.target,'目標','var(--up)','5 4');add(m.entry,'買う価格','var(--acc)');add(m.wall_price,'厚い買い板','var(--warn)');add(m.stop,'損切りの目安','var(--down)','5 4')}
+  else if(e.kind==='wall'){add(m.wall_price,'売り板','var(--warn)')}
+  let lo=Math.min(...bars.map(b=>b.l)),hi=Math.max(...bars.map(b=>b.h));const span=hi-lo||hi*0.002;
+  const inr=v=>v!=null&&v>lo-span*1.5&&v<hi+span*1.5;const ex=[...lines.map(l=>l.v),e.kind==='fvg'?m.bottom:null,e.kind==='fvg'?m.top:null].filter(inr);
+  lo=Math.min(lo,...ex);hi=Math.max(hi,...ex);const pad=(hi-lo)*0.08||hi*0.002;lo-=pad;hi+=pad;
+  const bw=(W-L-R)/Math.max(bars.length,30),x=i=>L+bw*(i+.5),y=v=>T+(hi-v)/(hi-lo)*(Ht-T-B);
+  const dec=hi<1000?1:0,f=v=>v.toLocaleString('ja-JP',{minimumFractionDigits:dec,maximumFractionDigits:dec});
+  const hm=t=>new Date(t).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'});
+  for(const v of ticks(lo,hi,5)){svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(v),y2:y(v),stroke:'var(--line)','stroke-width':1}));svg.appendChild(el('text',{x:W-R+6,y:y(v)+4,fill:'var(--mut)','font-size':11},f(v)))}
+  const every=Math.max(1,Math.ceil(70/bw));bars.forEach((b,i)=>{if(i%every===0)svg.appendChild(el('text',{x:Math.max(x(i),L+16),y:Ht-8,'text-anchor':'middle',fill:'var(--mut)','font-size':11},hm(b.t)))});
+  const ms=(e.bar_minutes||1)*60000,t0=Date.parse(e.acquired.time),at=t=>{const v=Date.parse(t);return bars.findIndex(b=>v>=Date.parse(b.t)&&v<Date.parse(b.t)+ms)};
+  // 検知した足（足の確定で出るサインは、確定した足＝直前の足）
+  let si=bars.findIndex(b=>Date.parse(b.t)+ms===t0);if(si<0)si=bars.findIndex(b=>t0>=Date.parse(b.t)&&t0<Date.parse(b.t)+ms);if(si<0)si=bars.length-1;
+  if(e.kind==='fvg'&&m.bottom!=null&&m.top!=null){let fi=m.formed?at(m.formed):-1;const fx=fi>0?x(fi-1)-bw/2:L;
+    svg.appendChild(el('rect',{x:fx,y:y(m.top),width:(W-R)-fx,height:Math.max(2,y(m.bottom)-y(m.top)),fill:'var(--warn)','fill-opacity':.16,stroke:'var(--warn)','stroke-width':1.5}));
+    svg.appendChild(el('text',{x:W-R-4,y:y(m.top)-4,'text-anchor':'end',fill:'var(--warn)','font-size':11,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},`FVG ${f(m.bottom)}〜${f(m.top)}`))}
+  svg.appendChild(el('rect',{x:x(si)-bw/2,y:T,width:bw,height:Ht-T-26,fill:'var(--acc)',opacity:.13}));
+  const w=Math.max(1,Math.min(14,bw*0.7)),vBot=Ht-26,vmax=Math.max(...bars.map(b=>b.v),1);
+  bars.forEach((b,i)=>{const col=b.c>b.o?'var(--up)':b.c<b.o?'var(--down)':'var(--mut)',g=el('g',{opacity:b.ok?1:.35});
+    if(b.v>0)g.appendChild(el('rect',{x:x(i)-w/2,y:vBot-b.v/vmax*VH,width:w,height:Math.max(1,b.v/vmax*VH),fill:col,opacity:.6}));
+    g.appendChild(el('line',{x1:x(i),x2:x(i),y1:y(b.h),y2:y(b.l),stroke:col,'stroke-width':1}));
+    const top=y(Math.max(b.o,b.c));g.appendChild(el('rect',{x:x(i)-w/2,y:top,width:w,height:Math.max(1,y(Math.min(b.o,b.c))-top),fill:col}));svg.appendChild(g)});
+  for(const l of lines){if(!inr(l.v)||l.v<lo||l.v>hi)continue;svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(l.v),y2:y(l.v),stroke:l.col,'stroke-width':1.5,'stroke-dasharray':l.dash||'none'}));
+    svg.appendChild(el('text',{x:L+4,y:y(l.v)-4,fill:l.col,'font-size':11,'font-weight':700,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},`${l.label} ${f(l.v)}`))}
+  const py=y(e.acquired.price);svg.appendChild(el('path',{d:`M${x(si)},${T+2} l6,-10 h-12 z`,fill:'var(--acc)',transform:`rotate(180 ${x(si)} ${T-3})`}));
+  svg.appendChild(el('circle',{cx:x(si),cy:py,r:5,fill:'var(--acc)',stroke:'var(--card)','stroke-width':2}));
+  const rt=x(si)+120>W-R;svg.appendChild(el('text',{x:x(si)+(rt?-9:9),y:py-8,'text-anchor':rt?'end':'start',fill:'var(--acc)','font-size':12,'font-weight':700,stroke:'var(--card)','stroke-width':4,'paint-order':'stroke'},'検知 '+f(e.acquired.price)));
+  const hit=el('rect',{x:L,y:T,width:W-L-R,height:Ht-T-26,fill:'transparent'});svg.appendChild(hit);
+  hit.onmousemove=ev=>{const r=svg.getBoundingClientRect(),px=(ev.clientX-r.left)*W/r.width,i=Math.max(0,Math.min(bars.length-1,Math.floor((px-L)/bw))),b=bars[i];
+    tip.innerHTML=`<b>${hm(b.t)}</b><br>始 ${f(b.o)}　高 ${f(b.h)}<br>安 ${f(b.l)}　終 ${f(b.c)}<br>出来高 ${n(b.v)}`;tip.style.display='block';const tx=x(i)*r.width/W;tip.style.left=(tx>r.width/2?tx-tip.offsetWidth-4:tx+20)+'px';tip.style.top='20px'};
+  hit.onmouseleave=()=>{tip.style.display='none'};
+  $('candlenote').textContent=`${e.bar_minutes||''}分足。青い帯と丸が検知した位置です。検知の前 最大90本・後 最大40本（保存済みの足）。下の棒は出来高。検知から時間がたっていないと、後ろの足はまだありません。`;
+}
 function draw(e){
   const svg=$('chart'),tip=$('tip');svg.innerHTML='';const W=svg.clientWidth||1000,Ht=320,L=10,R=70,T=16,B=28;svg.setAttribute('viewBox',`0 0 ${W} ${Ht}`);
   const tk=e.ticks.filter(t=>t.price!=null),pre=e.window.pre,post=e.window.post;
@@ -317,7 +380,7 @@ async function loadDetail(id){
   $('dhor').innerHTML=table([{t:'経過',l:1},'株価 '+G,'騰落率 '+C,{t:'備考',l:1}],H.map(h=>{const v=e.horizons[h];return {cells:[{l:1,v:lab(h)},v.price!=null?n(v.price,1)+'円':v.pending?'<span class="mut">記録中</span>':MISS,v.price!=null?pct(v.ret):v.pending?'':MISS,
       {l:1,v:v.missing?`<span class="miss">${esc(v.missing)}</span>`:v.price!=null&&v.age>0?`<span class="mut">その時点で最後の約定は ${n(v.age,0)}秒前</span>`:''}]}}))+
     `<div class="note">株価は、その時点までに受信した最後の約定値です。最大上昇 ${mx}／最大下落 ${mn}`+(e.status==='incomplete'?`　<span class="miss">※記録できた ${n(q.tracked_seconds,0)}秒間の範囲での値です</span>`:'')+'</div>';
-  draw(e);$('chartnote').textContent='丸印は検知後10秒・30秒・1分・3分・5分の株価。薄く色のついた範囲はデータがない時間です。気配は最良気配のみです。';
+  drawCandles(e);draw(e);$('chartnote').textContent='丸印は検知後10秒・30秒・1分・3分・5分の株価。薄く色のついた範囲はデータがない時間です。気配は最良気配のみです。';
   if(e.board){const lv=e.board.levels,rows=[];for(let i=10;i>=1;i--){const s=lv['Sell'+i];if(s)rows.push({cells:[{l:1,v:'売り'+i},n(s.Qty)??MISS,n(s.Price,1),'']})}
     for(let i=1;i<=10;i++){const b=lv['Buy'+i];if(b)rows.push({cells:[{l:1,v:'買い'+i},'',n(b.Price,1),n(b.Qty)??MISS]})}
     $('dboard').innerHTML=table([{t:'',l:1},'売り数量','値段','買い数量'],rows)+`<div class="note">成行売り ${num(e.board.MarketOrderSellQty)}／成行買い ${num(e.board.MarketOrderBuyQty)}／OVER ${num(e.board.OverSellQty)}／UNDER ${num(e.board.UnderBuyQty)}</div>`}
