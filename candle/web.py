@@ -55,7 +55,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <header><h1>candle</h1><span class="pill" id="mode"></span><span class="seg" id="modes" hidden><button data-mode="watch">通知のみ</button><button data-mode="paper">テスト</button><button data-mode="live">本番</button></span><span class="pill" id="feed"></span>
 <span class="pill" id="halt"></span><span class="mut" id="time"></span>
 <a href="/squeeze" style="color:var(--acc);font-size:13px">検知履歴（サインの後の値動き）</a>
-<a href="/analysis" style="color:var(--acc);font-size:13px">取引の分析</a>
+<a href="/analysis" style="color:var(--acc);font-size:13px">分析（取引・通知）</a>
 <label class="pill" style="cursor:pointer"><input type="checkbox" id="auto" style="vertical-align:-2px"> サインが出たらkabuステーションのチャートを自動で切り替える</label>
 <span style="flex:1"></span><button id="closeall" hidden>全ポジションを決済</button><button id="btn"></button></header>
 <main>
@@ -355,6 +355,14 @@ def start_web(target, port: int = 8765, data_dir=None, db_path=None) -> Threadin
             elif self.path.split("?")[0] == "/analysis":
                 from . import analysis
                 self._send(analysis.PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path.startswith("/api/analysis/signals"):
+                from urllib.parse import parse_qs, urlparse
+
+                from . import analysis
+                q = parse_qs(urlparse(self.path).query)
+                res = analysis.analyze_signals(db_path, q.get("from", [""])[0][:10] or None,
+                                               q.get("to", [""])[0][:10] or None)
+                self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"), "application/json")
             elif self.path.startswith("/api/analysis"):
                 from urllib.parse import parse_qs, urlparse
 

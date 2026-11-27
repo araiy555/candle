@@ -126,8 +126,125 @@ def analyze(db_path, mode: str = "paper", date_from: str | None = None, date_to:
     return dict(total=total, groups=groups, days=sorted(days, reverse=True), mode=mode)
 
 
+# 通知の種類（検知履歴の kind と、その中の結果）→ (表示名, 見込む方向)。方向 -1 は「下がれば見込みどおり」
+SIGNAL_KINDS = [
+    (("squeeze", None), "スクイーズ", 1),
+    (("sweep", None), "流動性スイープ", 1),
+    (("open", None), "寄り付き押し目", 1),
+    (("fvg", "hold"), "FVG反発", 1),
+    (("fvg", "break"), "FVG割れ（下がれば見込みどおり）", -1),
+    (("wall", "break"), "売り板突破（吸収して突破）", 1),
+    (("wall", "pulled"), "売り板：取消で消えた（通知なし）", 1),
+    (("wall", "rejected"), "売り板：跳ね返された（通知なし）", 1),
+]
+MIN_N = 30          # これ未満は「データ不足」とする件数
+EDGE = 0.03         # 見込みあり／薄いを分ける、1回あたりの平均（%）
+
+
+def _verdict(n: int, sim_avg: float | None, avg5: float | None) -> str:
+    if n < MIN_N or sim_avg is None or avg5 is None:
+        return "データ不足"
+    if sim_avg >= EDGE and avg5 > 0:
+        return "見込みあり"
+    if sim_avg <= -EDGE and avg5 < 0:
+        return "見込み薄"
+    return "どちらとも言えない"
+
+
+def analyze_signals(db_path, date_from: str | None = None, date_to: str | None = None,
+                    take: float = 0.3, cut: float = 0.3) -> dict:
+    """通知（検知履歴）の種類ごとに、その後5分の値動きを比べる。
+
+    騰落率は「見込む方向」にそろえる（FVG割れは下がればプラス）。あわせて、検知の株価で入り、
+    +take% か -cut% のどちらかに先に届いたら手じまい、届かなければ5分後に手じまう、という
+    単純な試算をする。手数料・すべり・実際に買えたかは含まない。
+    """
+    if not db_path:
+        return dict(error="この起動方法では分析を表示できません", kinds=[], days=[])
+    import json
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+        conn.row_factory = sqlite3.Row
+        try:
+            has_kind = "kind" in {r[1] for r in conn.execute("PRAGMA table_info(squeeze_events)")}
+            events = conn.execute(
+                "SELECT id, time, price, metrics, horizons, max_price, min_price, status"
+                + (", kind" if has_kind else ", 'squeeze' AS kind") + " FROM squeeze_events ORDER BY time").fetchall()
+            paths: dict[int, list] = {}
+            for r in conn.execute("SELECT event_id, price FROM squeeze_ticks WHERE rel>0 AND price IS NOT NULL "
+                                  "ORDER BY event_id, rel"):
+                paths.setdefault(r[0], []).append(r[1])
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return dict(kinds=[], days=[], take=take, cut=cut, min_n=MIN_N)      # まだ記録がない
+
+    days = sorted({e["time"][:10] for e in events}, reverse=True)
+    buckets: dict = {}
+    for e in events:
+        day = e["time"][:10]
+        if (date_from and day < date_from) or (date_to and day > date_to) or not e["price"]:
+            continue
+        m = json.loads(e["metrics"] or "{}")
+        key = (e["kind"], m.get("outcome") if e["kind"] in ("fvg", "wall") else None)
+        hz = json.loads(e["horizons"] or "{}")
+        buckets.setdefault(key, []).append(dict(
+            base=e["price"], hz=hz, hi=e["max_price"], lo=e["min_price"], done=e["status"] == "done",
+            path=paths.get(e["id"], []), hour=int(e["time"][11:13]), m=m))
+
+    out = []
+    for key, label, d in SIGNAL_KINDS:
+        rows = buckets.get(key, [])
+        if not rows:
+            out.append(dict(label=label, n=0, verdict="データ不足"))
+            continue
+        ret = lambda r, h: (d * (r["hz"][h]["price"] / r["base"] - 1) * 100
+                            if h in r["hz"] and r["hz"][h].get("price") else None)
+        col = {}
+        for h in ("60", "180", "300"):
+            v = [x for x in (ret(r, h) for r in rows) if x is not None]
+            col[h] = dict(n=len(v), avg=sum(v) / len(v) if v else None,
+                          win=sum(1 for x in v if x > 0.05) / len(v) if v else None,
+                          lose=sum(1 for x in v if x < -0.05) / len(v) if v else None)
+        done = [r for r in rows if r["done"] and r["hi"] and r["lo"]]
+        fav = [((r["hi"] if d > 0 else r["lo"]) / r["base"] - 1) * 100 * d for r in done]
+        adv = [((r["lo"] if d > 0 else r["hi"]) / r["base"] - 1) * 100 * d for r in done]
+        sims = []
+        for r in done:
+            res = None
+            for p in r["path"]:
+                x = d * (p / r["base"] - 1) * 100
+                if x >= take:
+                    res = take
+                    break
+                if x <= -cut:
+                    res = -cut
+                    break
+            if res is None:
+                res = ret(r, "300")
+            if res is not None:
+                sims.append(res)
+        sim = dict(n=len(sims), avg=sum(sims) / len(sims) if sims else None,
+                   take=sum(1 for x in sims if x >= take) / len(sims) if sims else None,
+                   cut=sum(1 for x in sims if x <= -cut) / len(sims) if sims else None)
+        hours: dict = {}
+        for r in rows:
+            v = ret(r, "300")
+            if v is not None:
+                hours.setdefault(r["hour"], []).append(v)
+        item = dict(label=label, n=len(rows), h60=col["60"], h180=col["180"], h300=col["300"],
+                    max_fav=sum(fav) / len(fav) if fav else None, max_adv=sum(adv) / len(adv) if adv else None,
+                    sim=sim, verdict=_verdict(len(sims), sim["avg"], col["300"]["avg"]),
+                    hours=[dict(hour=h, n=len(v), avg=sum(v) / len(v)) for h, v in sorted(hours.items())])
+        if key[0] == "open":      # 寄り付き押し目は、目標（+7ティック）と損切りのどちらに先に届いたかも出す
+            oc = [r["m"].get("outcome") for r in rows]
+            item["open"] = {k: oc.count(k) for k in ("target", "stop", "timeout")}
+        out.append(item)
+    return dict(kinds=out, days=days, take=take, cut=cut, min_n=MIN_N)
+
+
 PAGE = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>candle 取引の分析</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>candle 分析</title>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--fg:#1c2330;--mut:#6b7585;--line:#e3e6eb;--up:#c0392b;--down:#1f7a4d;--warn:#b7791f;--acc:#2f5fd0}
 @media(prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b2029;--fg:#e6e9ee;--mut:#98a2b3;--line:#2b323d;--up:#ff7b6b;--down:#4cc38a;--warn:#e0b050;--acc:#7da2ff}}
@@ -143,11 +260,13 @@ th{font-size:12px;color:var(--mut);font-weight:500}th:first-child,td:first-child
 .note{font-size:12px;color:var(--mut);margin:0 0 6px}select,button{font:inherit;padding:5px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
 td.bar{width:120px;padding-left:0}td.bar i{display:block;height:10px;border-radius:2px}
 </style></head><body>
-<header><h1>取引の分析</h1><a href="/">← 管理画面へ戻る</a></header>
+<header><h1>分析</h1><a href="/">← 管理画面へ戻る</a></header>
 <main>
-<section><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label for="mode">対象</label><select id="mode"><option value="paper">テスト（仮想売買）</option><option value="live">本番</option></select>
+<section><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label for="mode">対象</label><select id="mode"><option value="paper">テスト（仮想売買）</option><option value="live">本番</option><option value="signals">通知（サインの後の値動き）</option></select>
 <label for="day">期間</label><select id="day"></select><button id="reload">更新</button><span class="mut" id="msg"></span></div></section>
-<section><h2>全体</h2><div class="kpis" id="kpis"></div><div class="note" id="knote" style="margin-top:8px"></div></section>
+<section id="sigsec" hidden><h2>通知の種類ごとの比較</h2><div class="note" id="signote"></div><div id="sigs" style="overflow:auto"></div></section>
+<div class="two" id="sighours"></div>
+<section id="allsec"><h2>全体</h2><div class="kpis" id="kpis"></div><div class="note" id="knote" style="margin-top:8px"></div></section>
 <div class="two" id="groups"></div>
 </main>
 <script>
@@ -155,7 +274,23 @@ const $=id=>document.getElementById(id),n=(v,d=0)=>v==null?'-':Number(v).toLocal
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const yen=v=>`<span class="${v>0?'pos':v<0?'neg':''}">${v>0?'+':''}${n(v)}</span>`,rr=v=>`<span class="${v>0?'pos':v<0?'neg':''}">${v>0?'+':''}${n(v,2)}R</span>`;
 const FEW=5;let daysLoaded=false;
+const pc=v=>v==null?'<span class="mut">-</span>':`<span class="${v>0?'pos':v<0?'neg':''}">${v>0?'+':''}${n(v,2)}%</span>`,sh=v=>v==null?'<span class="mut">-</span>':n(v*100,0)+'%';
+async function loadSignals(day){
+  let q='';if(day&&day!=='all')q=`?from=${day}&to=${day}`;
+  let d;try{d=await (await fetch('/api/analysis/signals'+q)).json()}catch(e){$('msg').textContent='読み込めませんでした';return}
+  if(!daysLoaded){$('day').innerHTML='<option value="all">すべての日</option>'+(d.days||[]).map(x=>`<option>${x}</option>`).join('');daysLoaded=true}
+  $('msg').textContent=d.error||'';
+  const V={'見込みあり':'pos','見込み薄':'neg'};
+  $('signote').innerHTML=`騰落率は検知したときの株価からの変化で、<b>見込む方向にそろえています</b>（FVG割れは下がればプラス）。「試算」は、検知の株価で入り、+${d.take}% か −${d.cut}% のどちらかに先に届いたら手じまい、届かなければ5分後に手じまう場合の1回あたりの平均です。手数料・すべり・実際にその値段で買えたかは含みません。判定は、試算できた件数が${d.min_n}件以上のときだけ出す目安です。`;
+  $('sigs').innerHTML='<table><thead><tr><th>種類</th><th>件数</th><th>1分後</th><th>3分後</th><th>5分後</th><th>5分後に上／下</th><th>最大の伸び</th><th>最大の逆行</th><th>試算：1回あたり</th><th>利確／損切り</th><th>判定（目安）</th></tr></thead><tbody>'+
+    d.kinds.map(k=>k.n?`<tr${k.sim.n<d.min_n?' class="few"':''}><td>${esc(k.label)}${k.open?`<br><span class="mut" style="font-size:12px">目標に到達 ${k.open.target}／損切り ${k.open.stop}／届かず ${k.open.timeout}</span>`:''}</td><td>${k.n}</td><td>${pc(k.h60.avg)}</td><td>${pc(k.h180.avg)}</td><td>${pc(k.h300.avg)}</td><td>${sh(k.h300.win)}／${sh(k.h300.lose)}</td><td>${pc(k.max_fav)}</td><td>${pc(k.max_adv)}</td><td><b>${pc(k.sim.avg)}</b> <span class="mut">(${k.sim.n})</span></td><td>${sh(k.sim.take)}／${sh(k.sim.cut)}</td><td class="${V[k.verdict]||'mut'}">${esc(k.verdict)}</td></tr>`
+      :`<tr class="few"><td>${esc(k.label)}</td><td>0</td><td colspan="8" style="text-align:left" class="mut">まだ記録がありません</td><td class="mut">データ不足</td></tr>`).join('')+'</tbody></table>';
+  $('sighours').innerHTML=d.kinds.filter(k=>k.n&&k.hours.length).map(k=>`<section><h2>${esc(k.label)}：検知した時間帯別（5分後の平均）</h2><table><thead><tr><th>時間帯</th><th>件数</th><th>5分後の平均</th></tr></thead><tbody>`+
+    k.hours.map(h=>`<tr${h.n<FEW?' class="few"':''}><td>${h.hour}時台</td><td>${h.n}</td><td>${pc(h.avg)}</td></tr>`).join('')+'</tbody></table></section>').join('');
+}
 async function load(){
+  const sig=$('mode').value==='signals';$('sigsec').hidden=!sig;$('sighours').hidden=!sig;$('allsec').hidden=sig;$('groups').hidden=sig;
+  if(sig)return loadSignals($('day').value);
   const day=$('day').value;let q='?mode='+$('mode').value;if(day&&day!=='all')q+=`&from=${day}&to=${day}`;
   let d;try{d=await (await fetch('/api/analysis'+q)).json()}catch(e){$('msg').textContent='読み込めませんでした';return}
   if(!daysLoaded){$('day').innerHTML='<option value="all">すべての日</option>'+(d.days||[]).map(x=>`<option>${x}</option>`).join('');daysLoaded=true}

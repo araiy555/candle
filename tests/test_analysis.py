@@ -45,3 +45,42 @@ def test_analyze_groups_and_totals(tmp_path):
     assert one["total"]["n"] == 2 and one["days"] == ["2026-11-27", "2026-11-26"]
     assert analysis.analyze(db, "live")["total"] is None               # 本番の取引は無い
     assert analysis.analyze(None)["error"]
+
+
+def test_analyze_signals_compares_kinds_in_expected_direction(tmp_path):
+    import json
+    from candle.squeeze_log import SqueezeLog
+    db = tmp_path / "c.sqlite"
+    store = Store(db)
+    SqueezeLog(store)
+
+    def ev(kind, outcome, base, path, day=27, status="done"):
+        hz = {"60": {"price": path[1]}, "180": {"price": path[-1]}, "300": {"price": path[-1]}}
+        cur = store.conn.execute(
+            "INSERT INTO squeeze_events (symbol,name,time,price,metrics,conditions,horizons,max_price,min_price,"
+            "status,kind) VALUES ('7203','トヨタ',?,?,?,'[]',?,?,?,?,?)",
+            (f"2026-11-{day}T10:05:00+09:00", base, json.dumps({"outcome": outcome}), json.dumps(hz),
+             max(path), min(path), status, kind))
+        store.conn.executemany("INSERT INTO squeeze_ticks (event_id, rel, price) VALUES (?,?,?)",
+                               [(cur.lastrowid, 10.0 * (i + 1), p) for i, p in enumerate(path)])
+
+    ev("squeeze", None, 1000, [1001, 1002, 1004])            # +0.3% に先に届く
+    ev("squeeze", None, 1000, [999, 996, 1005])              # 先に -0.3% に届く（後で上がっても損切り）
+    ev("squeeze", None, 1000, [1001, 1000, 1001], day=26)    # どちらにも届かず、5分後 +0.1%
+    ev("fvg", "break", 1000, [999, 998, 996])                # 割れ：下がれば見込みどおり
+    ev("fvg", "hold", 1000, [1001, 1002, 1002], status="incomplete")
+    store.conn.commit()
+    res = analysis.analyze_signals(db)
+    k = {x["label"]: x for x in res["kinds"]}
+    sq = k["スクイーズ"]
+    assert sq["n"] == 3 and sq["sim"]["n"] == 3 and round(sq["sim"]["avg"], 4) == round((0.3 - 0.3 + 0.1) / 3, 4)
+    assert round(sq["sim"]["take"], 2) == 0.33 and round(sq["sim"]["cut"], 2) == 0.33
+    assert round(sq["h300"]["avg"], 2) == 0.33 and sq["verdict"] == "データ不足"     # 30件未満は判定しない
+    br = k["FVG割れ（下がれば見込みどおり）"]
+    assert round(br["h300"]["avg"], 2) == 0.4 and br["sim"]["avg"] == 0.3 and round(br["max_fav"], 2) == 0.4
+    assert k["FVG反発"]["n"] == 1 and k["FVG反発"]["sim"]["n"] == 0          # 追跡が途切れたものは試算しない
+    assert k["流動性スイープ"]["n"] == 0 and res["days"] == ["2026-11-27", "2026-11-26"]
+    assert analysis.analyze_signals(db, "2026-11-26", "2026-11-26")["kinds"][0]["n"] == 1
+    assert analysis._verdict(40, 0.05, 0.04) == "見込みあり" and analysis._verdict(40, -0.05, -0.02) == "見込み薄"
+    assert analysis._verdict(40, 0.01, 0.02) == "どちらとも言えない"
+    assert analysis.analyze_signals(tmp_path / "none.sqlite")["kinds"] == []
