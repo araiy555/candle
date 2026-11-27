@@ -111,6 +111,8 @@ def analyze(db_path, mode: str = "paper", date_from: str | None = None, date_to:
                "買った時点の5分足の向き。波の高値・安値が切り上がっていれば上昇、切り下がっていれば下降。"),
         _group(rows, lambda r: HTF.get(r["htf"].get("15"), (99, "記録なし")), "上位足（15分足）の向き別",
                "買った時点の15分足の向き。寄り付きから時間がたっていないと、足が少なく判定できません。"),
+        _group(rows, lambda r: HTF.get(r["htf"].get("60"), (99, "記録なし")), "上位足（1時間足）の向き別",
+               "買った時点の1時間足の向き。保存してある過去の日の分もつなげて判定します。"),
         _group(rows, lambda r: (99, "記録なし") if r["vwap_diff"] is None else
                (0, "VWAPより下で買い") if r["vwap_diff"] < 0 else (1, "VWAP以上で買い"), "VWAPとの位置"),
         _group(rows, lambda r: _bucket(r["price"], [1000, 2000, 3000, 5000, 10000], "円", "{:,.0f}"), "株価帯別"),

@@ -88,7 +88,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <section data-trade><h2>戦略別成績</h2><div id="stats"></div></section>
 <section><h2>検出されたサイン</h2><div id="signals"></div></section>
 <section data-trade><h2>取引履歴</h2><div id="history"></div></section>
-<section><h2>監視銘柄</h2><div class="note" style="padding:0 0 8px">5分・15分の矢印は上位足の向きです（↑上昇　↓下降　→レンジ　?まだ判定できない）。</div><div class="watch" id="watch"></div></section>
+<section><h2>監視銘柄</h2><div class="note" style="padding:0 0 8px">5分・15分・60分（1時間足）の矢印は上位足の向きです（↑上昇　↓下降　→レンジ　?まだ判定できない）。</div><div class="watch" id="watch"></div></section>
 </main>
 <dialog id="dlg"><div class="dh"><b id="dt"></b><button id="kabu">kabuステーションで表示</button><span class="mut" id="kmsg" style="font-size:12px"></span><button id="copy">銘柄コードをコピー</button>
 <a id="l1" target="_blank" rel="noopener">Yahoo!ファイナンス</a><a id="l2" target="_blank" rel="noopener">TradingView</a><a id="l3" target="_blank" rel="noopener">株探</a>
@@ -185,9 +185,9 @@ function draw(data){
   const svg=$('svg'),tip=$('tip'),bars=data.bars;svg.innerHTML='';tip.style.display='none';
   const W=svg.clientWidth||900,H=460,L=8,R=64,T=14,VH=84,VG=22,B=26+VH+VG;svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
   if(!bars.length){svg.appendChild(el('text',{x:W/2,y:H/2,'text-anchor':'middle',fill:'var(--mut)','font-size':13},'まだ足がありません（起動後に確定した足から表示します）'));return}
-  const bday=dayOf(bars[0].t),marks=(state?.signals||[]).filter(s=>s.symbol===data.symbol&&dayOf(s.time)===bday);
+  const many=(data.minutes||0)>=60,bday=dayOf(bars[0].t),marks=(state?.signals||[]).filter(s=>s.symbol===data.symbol&&(many||dayOf(s.time)===bday));
   // この銘柄のその日の売買（決済済みと保有中）。どこで買ってどこで売ったかを重ねて描く
-  const trs=[...(state?.history||[]),...(state?.positions||[])].filter(t=>t.symbol===data.symbol&&t.entry_time&&dayOf(t.entry_time)===bday);
+  const trs=[...(state?.history||[]),...(state?.positions||[])].filter(t=>t.symbol===data.symbol&&t.entry_time&&(many||dayOf(t.entry_time)===bday));
   const selT=trs.find(t=>t.id===curTrade);
   const vw=bars.map(b=>b.vwap).filter(v=>v);
   let lo=Math.min(...bars.map(b=>b.l),...marks.map(m=>m.pattern_low),...vw,...(selT?[selT.initial_stop]:[])),hi=Math.max(...bars.map(b=>b.h),...vw);
@@ -197,8 +197,10 @@ function draw(data){
   for(const v of ticks(lo,hi,5)){svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(v),y2:y(v),stroke:'var(--line)','stroke-width':1}));
     svg.appendChild(el('text',{x:W-R+6,y:y(v)+4,fill:'var(--mut)','font-size':11},fmt(v)))}
   const every=Math.max(1,Math.ceil(70/bw));
-  bars.forEach((b,i)=>{if(i%every===0)svg.appendChild(el('text',{x:Math.max(x(i),L+16),y:H-8,'text-anchor':'middle',fill:'var(--mut)','font-size':11},
-    new Date(b.t).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'})))});
+  const multi=(data.minutes||0)>=60,tl=t=>multi?new Date(t).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',month:'numeric',day:'numeric',hour:'2-digit'}):new Date(t).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'});
+  bars.forEach((b,i)=>{if(i%every===0)svg.appendChild(el('text',{x:Math.max(x(i),L+16),y:H-8,'text-anchor':'middle',fill:'var(--mut)','font-size':11},tl(b.t)))});
+  // 1時間足は日をまたぐので、日の変わり目に縦線を引く
+  if(multi)bars.forEach((b,i)=>{if(i&&dayOf(b.t)!==dayOf(bars[i-1].t))svg.appendChild(el('line',{x1:x(i)-bw/2,x2:x(i)-bw/2,y1:T,y2:H-26,stroke:'var(--line)','stroke-width':1,'stroke-dasharray':'2 3'}))});
   // 直近の上昇の範囲・割高/割安ゾーン・出来高の分布・FVG（ローソク足の下に描く）
   const st=data.structure;
   if(st){const ix=t=>bars.findIndex(b=>b.t===t),i0=ix(st.start),i1=ix(st.end);
@@ -225,6 +227,10 @@ function draw(data){
   if(data.prev_day)for(const [v,label] of [[data.prev_day.high,'前日高値'],[data.prev_day.low,'前日安値']]){if(v==null||v<=lo||v>=hi)continue;
     svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(v),y2:y(v),stroke:'var(--fg)','stroke-width':2,'stroke-dasharray':'10 5'}));
     svg.appendChild(el('text',{x:L+4,y:y(v)-4,fill:'var(--fg)','font-size':12,'font-weight':700,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},label+'（上位足の外部流動性） '+fmt(v)))}
+  // 1時間足（数日分）の外部流動性。今の表示範囲に入るときだけ線を引く
+  for(const q of (data.htf_liquidity||[])){if(q.level<=lo||q.level>=hi)continue;const up=q.side==='high';
+    svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(q.level),y2:y(q.level),stroke:'var(--fg)','stroke-width':2,'stroke-dasharray':'10 5'}));
+    svg.appendChild(el('text',{x:L+4,y:up?y(q.level)-4:y(q.level)+14,fill:'var(--fg)','font-size':12,'font-weight':700,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},'1時間足の外部流動性（'+(up?'上':'下')+'） '+fmt(q.level)))}
   const w=Math.max(1,Math.min(14,bw*0.7));
   // 出来高（株価とは別の枠。縦軸は共有しない）
   const vTop=H-26-VH,vBot=H-26,vmax=Math.max(...bars.map(b=>b.v),1),vy=v=>vBot-(v/vmax)*VH;
@@ -261,7 +267,7 @@ function draw(data){
   const hit=el('rect',{x:L,y:T,width:W-L-R,height:H-T-26,fill:'transparent'});svg.appendChild(hit);
   hit.onmousemove=e=>{const r=svg.getBoundingClientRect(),px=(e.clientX-r.left)*W/r.width,i=Math.max(0,Math.min(bars.length-1,Math.floor((px-L)/bw))),b=bars[i];
     cross.setAttribute('x1',x(i));cross.setAttribute('x2',x(i));cross.setAttribute('opacity',.7);
-    tip.innerHTML=`<b>${new Date(b.t).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'})}</b>${b.ok?'':' <span class="mut">（不完全）</span>'}<br>始 ${fmt(b.o)}　高 ${fmt(b.h)}<br>安 ${fmt(b.l)}　終 ${fmt(b.c)}<br>出来高 ${n(b.v)}<br>VWAP ${b.vwap?fmt(b.vwap)+'（終値との差 '+vdiff(b.c,b.vwap)+'）':'データなし'}`;
+    tip.innerHTML=`<b>${tl(b.t)}</b>${b.ok?'':' <span class="mut">（不完全）</span>'}<br>始 ${fmt(b.o)}　高 ${fmt(b.h)}<br>安 ${fmt(b.l)}　終 ${fmt(b.c)}<br>出来高 ${n(b.v)}<br>VWAP ${b.vwap?fmt(b.vwap)+'（終値との差 '+vdiff(b.c,b.vwap)+'）':'データなし'}`;
     tip.style.display='block';const tx=x(i)*r.width/W;tip.style.left=(tx>r.width/2?tx-tip.offsetWidth-4:tx+20)+'px';tip.style.top='20px'};
   hit.onmouseleave=()=>{cross.setAttribute('opacity',0);tip.style.display='none'};
 }
@@ -271,10 +277,11 @@ async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?
   $('qinfo').innerHTML=[['現在値',m(q.CurrentPrice)||n(q.CurrentPrice,1)+'円'],['前日比',m(q.ChangePreviousClose)||`<span class="${q.ChangePreviousClose>0?'pos':q.ChangePreviousClose<0?'neg':''}">${q.ChangePreviousClose>0?'+':''}${n(q.ChangePreviousClose,1)}円（${q.ChangePreviousClosePer>0?'+':''}${n(q.ChangePreviousClosePer,2)}%）</span>`],
     ['VWAP',m(q.VWAP)||n(q.VWAP,1)+'円'],['VWAPとの差',vdiff(q.CurrentPrice,q.VWAP)],['始値',m(q.OpeningPrice)||n(q.OpeningPrice,1)],['高値',m(q.HighPrice)||n(q.HighPrice,1)],['安値',m(q.LowPrice)||n(q.LowPrice,1)],
     ['足の平均値幅率',rng(d.range_pct)],['当日の値幅率',rng(d.day_range_pct)],['出来高',m(q.TradingVolume)||n(q.TradingVolume)+'株'],['売買代金',m(q.TradingValue)||n(q.TradingValue/1e8,1)+'億円']].map(([k,v])=>`<div><span>${k}</span><b style="font-size:15px">${v}</b></div>`).join('');
-  $('note').textContent=`${d.minutes||''}分足・当日分（このプログラムが起動中に受信した足）。赤=陽線、緑=陰線、薄い足=データ欠落を含む足。▲と点線はサインとパターン安値。下の棒は1本ごとの出来高。足の平均値幅率は、直近30本の（高値−安値）÷終値の平均。`;
+  $('note').textContent=`${d.minutes===60?'1時間足・保存してある過去の日の分もつなげて表示':(d.minutes||'')+'分足・当日分'}（このプログラムが起動中に受信した足）。赤=陽線、緑=陰線、薄い足=データ欠落を含む足。▲と点線はサインとパターン安値。下の棒は1本ごとの出来高。足の平均値幅率は、直近30本の（高値−安値）÷終値の平均。`;
   const TC={up:'pos',down:'neg'},fr=d.frames||[],pd=d.prev_day;
-  $('mtf').innerHTML=(fr.length?'<span class="mut">足の切り替え</span>'+fr.map(f=>`<button data-tf="${f.minutes===d.base_minutes?0:f.minutes}" style="padding:3px 10px${(curTf||d.base_minutes)===f.minutes?';border-color:var(--acc);color:var(--acc);font-weight:700':''}">${f.minutes}分足</button>`).join('')+
-    '<span class="mut" style="margin-left:10px">向き</span>'+fr.map(f=>`<span>${f.minutes}分足 <b class="${TC[f.trend]||'mut'}">${esc(f.label)}</b></span>`).join('<span class="mut">／</span>'):'')+
+  $('mtf').innerHTML=(fr.length?'<span class="mut">足の切り替え</span>'+fr.map(f=>`<button data-tf="${f.minutes===d.base_minutes?0:f.minutes}" style="padding:3px 10px${(curTf||d.base_minutes)===f.minutes?';border-color:var(--acc);color:var(--acc);font-weight:700':''}">${esc(f.name)}</button>`).join('')+
+    '<span class="mut" style="margin-left:10px">向き</span>'+fr.map(f=>`<span>${esc(f.name)} <b class="${TC[f.trend]||'mut'}">${esc(f.label)}</b></span>`).join('<span class="mut">／</span>'):'')+
+    ((d.htf_liquidity||[]).length?`<span class="mut" style="margin-left:10px">1時間足の外部流動性</span><span>${['high','low'].map(sd=>{const v=d.htf_liquidity.filter(q=>q.side===sd).map(q=>n(q.level,1));return v.length?(sd==='high'?'上 ':'下 ')+'<b>'+v.join('・')+'</b>':''}).filter(Boolean).join('　')}</span>`:'')+
     (pd?`<span class="mut" style="margin-left:10px">前日（${pd.day.slice(5)}）</span><span>高値 <b>${n(pd.high,1)}</b>　安値 <b>${n(pd.low,1)}</b>　終値 <b>${n(pd.close,1)}</b></span>`:'');
   const tt=(state?.history||[]).find(t=>t.id===curTrade),hmm=s=>new Date(s).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'});
   $('tinfo').innerHTML=tt?`<b>この取引</b>　${md(tt.entry_time)} 買 ${n(tt.entry_price,1)} → ${hmm(tt.exit_time)} 売 ${n(tt.exit_price,1)}　${yen(tt.pnl)}　<span class="mut">${esc(tt.reason||'')}／最初の損切り ${n(tt.initial_stop,1)}／${n(tt.qty)}株</span>`+(d.bars.length?'':'　<span class="warn">この日の足が保存されていません</span>'):'';
@@ -360,7 +367,7 @@ def start_web(target, port: int = 8765, data_dir=None, db_path=None) -> Threadin
                     return self._send(b"bad symbol", "text/plain", 400)
                 data = None
                 tf = q.get("tf", [""])[0]
-                tf = int(tf) if tf.isdigit() and int(tf) in (5, 15) else None
+                tf = int(tf) if tf.isdigit() and int(tf) in (5, 15, 60) else None
                 if day and day != datetime.now(JST).strftime("%Y-%m-%d"):
                     data = past_chart(db_path, symbol, day, cur().names.get(symbol))   # 過去の日は保存した足から
                 self._send(json.dumps(data or cur().chart_data(symbol, tf), ensure_ascii=False).encode("utf-8"),

@@ -108,6 +108,20 @@ class Store:
         return [Bar(r[0], datetime.fromisoformat(r[2]).astimezone(JST), r[1], r[3], r[4], r[5],
                     r[6], r[7], r[8], bool(r[9]), r[10]) for r in reversed(rows)]
 
+    def past_bars(self, symbol: str, minutes: int, today: str, days: int = 20) -> list[Bar]:
+        """今日より前の、保存してある足（直近 days 営業日分。古い順）。1時間足を作るために使う。"""
+        d = [r[0] for r in self.conn.execute(
+            "SELECT DISTINCT substr(start,1,10) FROM bars WHERE symbol=? AND minutes=? AND start<? "
+            "ORDER BY 1 DESC LIMIT ?", (symbol, minutes, today, days))]
+        if not d:
+            return []
+        rows = self.conn.execute(
+            "SELECT symbol, minutes, start, open, high, low, close, volume, ticks, complete, vwap FROM bars "
+            "WHERE symbol=? AND minutes=? AND start>=? AND start<? ORDER BY start",
+            (symbol, minutes, d[-1], today)).fetchall()
+        return [Bar(r[0], datetime.fromisoformat(r[2]).astimezone(JST), r[1], r[3], r[4], r[5],
+                    r[6], r[7], r[8], bool(r[9]), r[10]) for r in rows]
+
     def prev_day(self, symbol: str, minutes: int, today: str) -> dict | None:
         """保存してある足から、直前の営業日の高値・安値・終値を出す。無ければ None。"""
         r = self.conn.execute(

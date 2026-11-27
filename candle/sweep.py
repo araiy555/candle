@@ -21,7 +21,7 @@ from .bars import Bar
 
 @dataclass(frozen=True)
 class SweepParams:
-    lookback: int = 90           # 流動性プール（押し安値）を探す本数
+    lookback: int = 330          # 流動性を探す本数（1分足で当日すべて）
     pivot: int = 3               # 押し安値と認める左右の本数
     min_age: int = 5             # 押し安値ができてから、これ以上の本数が経っていること
     reclaim_bars: int = 2        # 割り込んでから、この本数以内に安値の上へ戻すこと
@@ -51,9 +51,9 @@ def pools(bars: Sequence[Bar], p: SweepParams | None = None, upto: int | None = 
     p = p or SweepParams()
     n = len(bars) if upto is None else upto
     out = []
-    for i in range(max(p.pivot, n - p.lookback), n - p.pivot):
+    for i in range(max(0, n - p.lookback), n - p.pivot):
         low = bars[i].low
-        if any(bars[j].low < low for j in range(i - p.pivot, i + p.pivot + 1) if j != i):
+        if any(bars[j].low < low for j in range(max(0, i - p.pivot), i + p.pivot + 1) if j != i):
             continue
         if any(bars[j].low < low for j in range(i + 1, n)):
             continue                                  # すでに割られた
@@ -83,9 +83,9 @@ def liquidity_levels(bars: Sequence[Bar], p: SweepParams | None = None, major: i
     for side, val, better in (("high", lambda b: b.high, lambda a, b: a > b),
                               ("low", lambda b: b.low, lambda a, b: a < b)):
         found = []
-        for i in range(p.pivot, n - p.pivot):
+        for i in range(0, n - p.pivot):               # 始まりの足も対象にする（左側は、ある分だけで比べる）
             lv = val(bars[i])
-            if any(better(val(bars[j]), lv) for j in range(i - p.pivot, i + p.pivot + 1) if j != i):
+            if any(better(val(bars[j]), lv) for j in range(max(0, i - p.pivot), i + p.pivot + 1) if j != i):
                 continue
             if any(better(val(bars[j]), lv) for j in range(i + 1, n)):
                 continue                              # すでに抜かれた（流動性は消化済み）
@@ -94,7 +94,7 @@ def liquidity_levels(bars: Sequence[Bar], p: SweepParams | None = None, major: i
             big = not any(better(val(bars[j]), lv) for j in range(max(0, i - major), min(n, i + major + 1)) if j != i)
             edge = lv == (day_high if side == "high" else day_low)
             found.append(dict(side=side, t=bars[i].start.isoformat(), level=lv,
-                              kind="external" if (big and min(i, n - 1 - i) >= major) or edge else "internal"))
+                              kind="external" if (big and n - 1 - i >= major) or edge else "internal"))
         ext = [f for f in found if f["kind"] == "external"]
         inner = sorted((f for f in found if f["kind"] == "internal"), key=lambda f: abs(f["level"] - last))
         out += ext + inner[:max_internal]
@@ -169,7 +169,7 @@ def context(bars: Sequence[Bar], s: int, i: int, level: float, low: float, p: Sw
         mid = (leg_low + leg_high) / 2
         zone = "below" if low < leg_low else "discount" if low < mid else "premium"
     # 外部流動性: 当日安値、または左右 major 本の中で一番安い大きな波の安値（チャートの表示と同じ決め方）
-    big = i >= p.major and not any(bars[j].low < level for j in range(i - p.major, min(s, i + p.major + 1)) if j != i)
+    big = not any(bars[j].low < level for j in range(max(0, i - p.major), min(s, i + p.major + 1)) if j != i)
     ext = "当日安値" if level <= day_low else "大きな波の安値" if big else None
     out = dict(after_bos=after_bos, zone=zone, liquidity="external" if ext else "internal", ext_kind=ext,
                leg_low=leg_low, leg_high=leg_high, bos_setup=after_bos and zone == "discount" and not ext)
@@ -261,9 +261,9 @@ def _detect_high(bars: Sequence[Bar], p: SweepParams) -> SweepSignal | None:
     for back in range(0, p.reclaim_bars):
         s = n - 1 - back
         tops = []
-        for i in range(max(p.pivot, s - p.lookback), s - p.pivot):
+        for i in range(max(0, s - p.lookback), s - p.pivot):
             lv = bars[i].high
-            if any(bars[j].high > lv for j in range(i - p.pivot, i + p.pivot + 1) if j != i):
+            if any(bars[j].high > lv for j in range(max(0, i - p.pivot), i + p.pivot + 1) if j != i):
                 continue
             if any(bars[j].high > lv for j in range(i + 1, s)):
                 continue                              # すでに抜かれた
@@ -285,8 +285,7 @@ def _detect_high(bars: Sequence[Bar], p: SweepParams) -> SweepSignal | None:
             continue
         depth = (high - level) / level * 100
         day_high = max(b.high for b in bars[:s])
-        big = i >= p.major and not any(bars[j].high > level
-                                       for j in range(i - p.major, min(s, i + p.major + 1)) if j != i)
+        big = not any(bars[j].high > level for j in range(max(0, i - p.major), min(s, i + p.major + 1)) if j != i)
         ext = "当日高値" if level >= day_high else "大きな波の高値" if big else None
         metrics = dict(side="high", level=level, level_time=bars[i].start.isoformat(), sweep_low=high,
                        depth_pct=depth, volume_ratio=ratio, sweep_volume=vol, avg_volume=avg,

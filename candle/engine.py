@@ -66,6 +66,8 @@ class PaperEngine:
         # 寄り付き後の押し目買い（厚い買い板を背に、数ティック上を狙う）。通知と記録のみ
         self.opening = opening.OpenTracker() if OPEN_STRATEGY in wanted else None
         self.prev_days: dict[str, dict] = {}
+        self.hourly_past: dict[str, list[Bar]] = {}
+        self._hourly_ext: dict[str, tuple] = {}
         self._frames: dict[str, tuple] = {}
         self.open_active: list[dict] = []                  # 目標・損切りのどちらに先に届くかを見ている検知
         want_flow = (FLOW_STRATEGY in wanted or self.walls is not None or self.sweep_on
@@ -116,6 +118,9 @@ class PaperEngine:
             self.history[sym].extend(bars)
             if bars:
                 self.prices.setdefault(sym, bars[-1].close)
+            past = self.store.past_bars(sym, minutes, today.isoformat())
+            if past:
+                self.hourly_past[sym] = mtf.aggregate(past, 60)   # 過去の日の1時間足（数日分の流れを見る）
             prev = self.store.prev_day(sym, minutes, today.isoformat())
             if prev:
                 self.prev_days[sym] = prev     # 前日の高値・安値（上位足の流動性として表示する）
@@ -194,25 +199,42 @@ class PaperEngine:
         key = (h[-1].start, len(h))
         hit = self._frames.get(symbol)
         if hit is None or hit[0] != key:
-            bars = contiguous_tail(list(h))
-            hit = (key, mtf.summary(bars, bars[0].minutes))
+            bars = list(h)          # 当日の足すべて（約定の無かった分や昼休みで途切れていても使う）
+            hit = (key, mtf.summary(bars, bars[0].minutes, self.hourly_past.get(symbol, ())))
             self._frames[symbol] = hit
         return hit[1]
 
     def direction_text(self, symbol: str) -> str:
         """通知に添える方向性。例: '方向：5分足 上昇／15分足 レンジ'。上位足が無ければ空。"""
         fr = [f for f in self.frames(symbol)[1:] if f["trend"]]      # 判定できない足は書かない
-        return "方向：" + "／".join(f"{f['minutes']}分足 {f['label']}" for f in fr) if fr else ""
+        return "方向：" + "／".join(f"{f['name']} {f['label']}" for f in fr) if fr else ""
 
     def _notify(self, title: str, body: str, symbol: str) -> None:
         """通知を送る。上位足の方向性を添える。"""
         d = self.direction_text(symbol)
         self.notify(title, f"{body}　{d}" if d else body, symbol)
 
+    def hourly_external(self, symbol: str) -> list[dict]:
+        """過去の日をつなげた1時間足から見た外部流動性（数日間の大きな高値・安値）。上位足の流動性として使う。"""
+        past = self.hourly_past.get(symbol)
+        if not past:
+            return []
+        hit = self._hourly_ext.get(symbol)
+        if hit is None or hit[0] != len(past):
+            lv = sweep.liquidity_levels(past, self.sweep_params, major=6, max_internal=0)
+            hit = (len(past), [dict(side=x["side"], level=x["level"], t=x["t"]) for x in lv])
+            self._hourly_ext[symbol] = hit
+        today = list(self.history.get(symbol, ()))
+        hi = max((b.high for b in today[:-2]), default=None)
+        lo = min((b.low for b in today[:-2]), default=None)
+        # 今日すでに抜かれたものは、流動性を使い切ったものとして除く
+        return [x for x in hit[1] if not ((x["side"] == "high" and hi is not None and hi > x["level"])
+                                          or (x["side"] == "low" and lo is not None and lo < x["level"]))]
+
     def htf(self, symbol: str) -> str:
         """上位足（5分足・15分足）の向き。取引の記録用。"""
-        bars = contiguous_tail(list(self.history.get(symbol, ())))
-        return mtf.code(bars, bars[0].minutes) if bars else ""
+        bars = list(self.history.get(symbol, ()))
+        return mtf.code(bars, bars[0].minutes, self.hourly_past.get(symbol, ())) if bars else ""
 
     def is_ranging(self, symbol: str) -> bool:
         """値動きが小さい（レンジ）か。足の平均値幅率が設定の下限より小さいとき。足が足りなければ False。"""
@@ -313,7 +335,8 @@ class PaperEngine:
         """
         if not self.sweep_on:
             return
-        sig = sweep.detect(contiguous_tail(list(history)[-200:]), self.sweep_params)
+        # 流動性は当日の足すべてから探す（約定の無かった分や昼休みで途切れていても、高値・安値は有効）
+        sig = sweep.detect(list(history)[-330:], self.sweep_params)
         if sig is None:
             return
         m, prev = sig.metrics, self.prev_days.get(bar.symbol)
@@ -333,6 +356,19 @@ class PaperEngine:
                 m.update(target=goal, target_pct=(goal / bar.close - 1) * 100, target_kind="前日安値" if up else "前日高値",
                          waypoints=[v for v in m.get("waypoints", []) if abs(v - bar.close) < abs(goal - bar.close)])
                 sig.note = sig.note.replace(old_target, sweep.target_text(m) + f"（{m['target_kind']}）")
+        # 1時間足（数日分）の外部流動性にもタッチしたか。タッチした側にもう流動性が残っていなければ、より強い場面
+        hx = [x for x in self.hourly_external(bar.symbol) if x["side"] == ("high" if up else "low")]
+        hit = [x["level"] for x in hx if ((bar.close <= x["level"] < sig.low) if up else (sig.low < x["level"] <= bar.close))]
+        if hit:
+            left = [x["level"] for x in hx if ((x["level"] > sig.low) if up else (x["level"] < sig.low))]
+            lv = max(hit) if up else min(hit)
+            m.update(liquidity="external", ext_kind="1時間足の外部流動性", bos_setup=False, htf_level=lv,
+                     htf_cleared=not left)
+            side_word = "上" if up else "下"
+            other = "下" if up else "上"
+            sig.note = (f"1時間足の外部流動性 {lv:,.1f} にもタッチ"
+                        + (f"（{side_word}にはもう流動性が残っておらず、{other}にしか流動性がありません）" if not left else "")
+                        + "。" + sig.note)
         sid = SWEEP_STRATEGY
         key = (bar.symbol, sig.level_time.isoformat() + (":high" if up else ""))
         if key in self.sweep_seen or any((x, bar.symbol, bar.end.isoformat()) in self.seen
@@ -587,18 +623,21 @@ class PaperEngine:
             except RuntimeError:   # 追加と読み出しが重なった場合はやり直す
                 base = []
         minutes = base[0].minutes if base else None
-        frames = mtf.summary(contiguous_tail(base), minutes) if base else []
+        frames = self.frames(symbol) if base else []
         bars = base
         if base and tf and tf > minutes and tf % minutes == 0:
             bars, minutes = mtf.aggregate(base, tf), tf
+            if tf == 60:
+                bars = list(self.hourly_past.get(symbol, ())) + bars      # 1時間足は過去の日もつなげる
         tail = contiguous_tail(bars[-200:]) if bars else []
         return dict(symbol=symbol, name=self.names.get(symbol), minutes=minutes,
                     base_minutes=base[0].minutes if base else None, frames=frames,
                     prev_day=self.prev_days.get(symbol),
+                    htf_liquidity=self.hourly_external(symbol) if minutes and minutes < 60 else [],
                     quote=self.quotes.get(symbol),
                     range_pct=self.range_pct(symbol), day_range_pct=self.day_range_pct(symbol),
                     structure=fvg.structure(tail, self.fvg_params) if bars else None,
-                    liquidity=sweep.liquidity_levels(tail, self.sweep_params) if bars else [],
+                    liquidity=sweep.liquidity_levels(bars[-330:], self.sweep_params) if bars else [],
                     pools=[dict(t=tail[i].start.isoformat(), level=lv)
                            for i, lv in sweep.pools(tail, self.sweep_params)] if bars else [],
                     bars=[dict(t=b.start.isoformat(), o=b.open, h=b.high, l=b.low, c=b.close,
@@ -657,4 +696,4 @@ class PaperEngine:
                        for s in self.watchlist],
             positions=positions, signals=signals, history=history,
             stats=[dict(strategy=s.name, **summarize(by_strategy.get(s.id, [])))
-                   for s in STRATEGIES])
+                   for s in STRATEGIES if s.id not in (BOS_STRATEGY, EXT_STRATEGY)])   # 一本化した旧サインは出さない

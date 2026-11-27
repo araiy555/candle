@@ -14,7 +14,7 @@ from typing import Sequence
 
 from .bars import Bar
 
-FRAMES = (5, 15)                 # 上位足として見る分足
+FRAMES = (5, 15, 60)             # 上位足として見る分足（60＝1時間足。過去の日の分もつなげて使う）
 LABELS = {"up": "上昇", "down": "下降", "range": "レンジ", None: "判定できず"}
 
 
@@ -61,18 +61,24 @@ def trend(bars: Sequence[Bar], pivot: int = 2) -> str | None:
     return "range"
 
 
-def summary(bars: Sequence[Bar], base: int) -> list[dict]:
-    """足の種類ごとの向き。base は元の足の分数。"""
+def name(minutes: int) -> str:
+    return "1時間足" if minutes == 60 else f"{minutes}分足"
+
+
+def summary(bars: Sequence[Bar], base: int, hourly_past: Sequence[Bar] = ()) -> list[dict]:
+    """足の種類ごとの向き。base は元の足の分数。hourly_past は過去の日の1時間足（あれば前につなげる）。"""
     out = [dict(minutes=base, trend=trend(bars), bars=len(bars))]
     for m in FRAMES:
         if m > base and m % base == 0:
             agg = aggregate(bars, m)
+            if m == 60:
+                agg = list(hourly_past) + agg
             out.append(dict(minutes=m, trend=trend(agg), bars=len(agg)))
     for x in out:
-        x["label"] = LABELS[x["trend"]]
+        x["label"], x["name"] = LABELS[x["trend"]], name(x["minutes"])
     return out
 
 
-def code(bars: Sequence[Bar], base: int) -> str:
-    """取引の記録用。例: '5:up,15:range'（判定できない足は none）。"""
-    return ",".join(f"{x['minutes']}:{x['trend'] or 'none'}" for x in summary(bars, base)[1:])
+def code(bars: Sequence[Bar], base: int, hourly_past: Sequence[Bar] = ()) -> str:
+    """取引の記録用。例: '5:up,15:range,60:down'（判定できない足は none）。"""
+    return ",".join(f"{x['minutes']}:{x['trend'] or 'none'}" for x in summary(bars, base, hourly_past)[1:])
