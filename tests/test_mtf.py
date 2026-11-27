@@ -45,9 +45,9 @@ def test_summary_and_engine_chart_frames():
     store.save_bars(make_bars([(990, 1005, 985, 1000)] * 3, "T", start=(9, 0), day=23, minutes=1))
     e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"})
     e.load_history(["T"], 1, today=bars[0].start.date())
-    assert e.prev_days["T"] == dict(day="2026-11-23", high=1005, low=985, close=1000)
     for b in bars:
         e.on_bar(b)
+    assert e.prev_days["T"] == dict(day="2026-11-23", high=1005, low=985, close=1000)
     one, five = e.chart_data("T"), e.chart_data("T", 5)
     assert one["minutes"] == 1 and len(one["bars"]) == 56 and one["prev_day"]["high"] == 1005
     assert five["minutes"] == 5 and five["base_minutes"] == 1 and len(five["bars"]) == 12
@@ -94,9 +94,9 @@ def test_hourly_frame_uses_past_days_and_its_external_liquidity(tmp_path):
     e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"}, trade_enabled=False)
     today = make_bars([(1045, 1046, 1040, 1041)] * 30, "T", start=(9, 0), day=24, minutes=1)
     e.load_history(["T"], 1, today=today[0].start.date())
-    assert len(e.hourly_past["T"]) == 18 and e.hourly_past["T"][0].minutes == 60        # 3日 × 6本
     for b in today:
         e.on_bar(b)
+    assert len(e.hourly_past["T"]) == 18 and e.hourly_past["T"][0].minutes == 60        # 3日 × 6本
     hx = e.hourly_external("T")
     assert min(x["level"] for x in hx if x["side"] == "low") == 999                      # 数日間の安値
     assert any(x["side"] == "high" and x["level"] == 1061 for x in hx)
@@ -106,3 +106,27 @@ def test_hourly_frame_uses_past_days_and_its_external_liquidity(tmp_path):
     assert one["frames"][-1]["name"] == "1時間足" and one["frames"][-1]["bars"] == 19
     assert {x["level"] for x in one["htf_liquidity"]} >= {999, 1061}
     assert e.htf("T").split(",")[-1].startswith("60:")
+
+
+def test_chart_shows_last_trading_day_when_today_has_no_bars(tmp_path):
+    from datetime import date
+    from candle.engine import PaperEngine
+    from candle.risk import RiskLimits, RiskManager
+    from candle.store import Store
+    store = Store(tmp_path / "c.sqlite")
+    store.save_bars(make_bars([(1000 + i, 1003 + i, 999 + i, 1001 + i) for i in range(40)], "T", start=(9, 0), day=26, minutes=1))
+    store.save_bars(make_bars([(1100 + i, 1103 + i, 1099 + i, 1101 + i) for i in range(40)], "T", start=(9, 0), day=27, minutes=1))
+    sent = []
+    e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"}, trade_enabled=False,
+                    notify=lambda *a: sent.append(a))
+    e.load_history(["T"], 1, today=date(2026, 11, 28))                  # 土曜。本日の足は無い
+    c = e.chart_data("T")
+    assert (c["shown_day"], c["live"], len(c["bars"])) == ("2026-11-27", False, 40)
+    assert c["prev_day"]["day"] == "2026-11-26" and len(e.history["T"]) == 0 and sent == []
+    assert len(e.chart_data("T", 60)["bars"]) == 2                      # 26日と27日の1時間足
+    first = make_bars([(1150, 1152, 1149, 1151)], "T", start=(9, 0), day=30, minutes=1)[0]
+    e.on_bar(first)                                                     # 月曜の最初の足が来た
+    c = e.chart_data("T")
+    assert (c["shown_day"], c["live"], len(c["bars"])) == ("2026-11-30", True, 1)
+    assert c["prev_day"] == dict(day="2026-11-27", high=1142, low=1099, close=1140)
+    assert len(e.chart_data("T", 60)["bars"]) == 3 and "T" not in e.last_day

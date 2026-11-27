@@ -67,6 +67,7 @@ class PaperEngine:
         self.opening = opening.OpenTracker() if OPEN_STRATEGY in wanted else None
         self.prev_days: dict[str, dict] = {}
         self.hourly_past: dict[str, list[Bar]] = {}
+        self.last_day: dict[str, list[Bar]] = {}     # 当日の足が無いときに表示する、直近の営業日の足
         self._hourly_ext: dict[str, tuple] = {}
         self._frames: dict[str, tuple] = {}
         self.open_active: list[dict] = []                  # 目標・損切りのどちらに先に届くかを見ている検知
@@ -108,7 +109,11 @@ class PaperEngine:
         self.apply_sizing()
 
     def load_history(self, symbols: list[str], minutes: int, today=None) -> None:
-        """保存済みの当日の足を読み込む。再起動してもチャートと判定を途切れさせないため。"""
+        """保存済みの足を読み込む。再起動してもチャートと判定を途切れさせないため。
+
+        当日の足のほか、過去の日の足から1時間足と前日の高値・安値を作る。当日の足がまだ無いとき
+        （休日・寄り付き前）は、直近の営業日の足を表示用に持っておく（サインの判定には使わない）。
+        """
         today = today or datetime.now(JST).date()
         for sym in symbols:
             if self.history[sym]:
@@ -119,11 +124,34 @@ class PaperEngine:
             if bars:
                 self.prices.setdefault(sym, bars[-1].close)
             past = self.store.past_bars(sym, minutes, today.isoformat())
+            ref = today.isoformat()
+            if past and not bars:
+                last = past[-1].start.date()
+                self.last_day[sym] = [b for b in past if b.start.date() == last]
+                past = [b for b in past if b.start.date() != last]
+                ref = last.isoformat()
             if past:
                 self.hourly_past[sym] = mtf.aggregate(past, 60)   # 過去の日の1時間足（数日分の流れを見る）
-            prev = self.store.prev_day(sym, minutes, today.isoformat())
+            prev = self.store.prev_day(sym, minutes, ref)
             if prev:
                 self.prev_days[sym] = prev     # 前日の高値・安値（上位足の流動性として表示する）
+
+    def _roll_day(self, symbol: str, old: list[Bar]) -> None:
+        """日が変わった。前の日の足を1時間足にまとめて過去分に足し、前日の高値・安値を入れ替える。"""
+        if not old:
+            return
+        self.hourly_past[symbol] = self.hourly_past.get(symbol, []) + mtf.aggregate(old, 60)
+        self.prev_days[symbol] = dict(day=old[0].start.date().isoformat(), high=max(b.high for b in old),
+                                      low=min(b.low for b in old), close=old[-1].close)
+
+    def day_bars(self, symbol: str) -> list[Bar]:
+        """表示・向きの判定に使う足。当日の足、まだ無ければ直近の営業日の足。"""
+        for _ in range(3):
+            try:
+                return list(self.history.get(symbol, ())) or list(self.last_day.get(symbol, ()))
+            except RuntimeError:   # 追加と読み出しが重なった場合はやり直す
+                continue
+        return []
 
     # --- 入力 ---------------------------------------------------------------
     def on_bar(self, bar: Bar) -> None:
@@ -131,7 +159,10 @@ class PaperEngine:
             return   # 先物・TOPIXは地合いの判定にだけ使う（売買や通知の対象にしない）
         h = self.history[bar.symbol]
         if h and h[-1].start.date() != bar.start.date():
+            self._roll_day(bar.symbol, list(h))
             h.clear()
+        if bar.symbol in self.last_day:
+            self._roll_day(bar.symbol, self.last_day.pop(bar.symbol))   # 当日の足が来たので、表示用の前営業日分を過去へ
         h.append(bar)
         self.last_bar = bar.end
         if not bar.complete or bar.start.time() >= self.exit_after or self.in_quiet_open(bar.end):
@@ -193,13 +224,13 @@ class PaperEngine:
 
     def frames(self, symbol: str) -> list[dict]:
         """足ごとの向き（1分足・5分足・15分足）。足が確定するまで同じ結果を使い回す。"""
-        h = self.history.get(symbol)
+        h = self.day_bars(symbol)   # 当日の足すべて（約定の無かった分や昼休みで途切れていても使う）
         if not h:
             return []
         key = (h[-1].start, len(h))
         hit = self._frames.get(symbol)
         if hit is None or hit[0] != key:
-            bars = list(h)          # 当日の足すべて（約定の無かった分や昼休みで途切れていても使う）
+            bars = h
             hit = (key, mtf.summary(bars, bars[0].minutes, self.hourly_past.get(symbol, ())))
             self._frames[symbol] = hit
         return hit[1]
@@ -616,12 +647,7 @@ class PaperEngine:
 
     def chart_data(self, symbol: str, tf: int | None = None) -> dict:
         """チャート表示用の当日の足。tf を指定すると、その分足にまとめて返す。管理画面のスレッドから呼ばれる。"""
-        for _ in range(3):
-            try:
-                base = list(self.history.get(symbol, ()))
-                break
-            except RuntimeError:   # 追加と読み出しが重なった場合はやり直す
-                base = []
+        base = self.day_bars(symbol)
         minutes = base[0].minutes if base else None
         frames = self.frames(symbol) if base else []
         bars = base
@@ -633,6 +659,8 @@ class PaperEngine:
         return dict(symbol=symbol, name=self.names.get(symbol), minutes=minutes,
                     base_minutes=base[0].minutes if base else None, frames=frames,
                     prev_day=self.prev_days.get(symbol),
+                    shown_day=base[0].start.date().isoformat() if base else None,
+                    live=bool(self.history.get(symbol)),
                     htf_liquidity=self.hourly_external(symbol) if minutes and minutes < 60 else [],
                     quote=self.quotes.get(symbol),
                     range_pct=self.range_pct(symbol), day_range_pct=self.day_range_pct(symbol),
