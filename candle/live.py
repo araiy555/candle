@@ -139,7 +139,8 @@ class LiveEngine(PaperEngine):
         st = self.settings
         t = Trade(self.mode, strategy_id, symbol, sig_time, ts, price, qty, stop, stop, high=price,
                   trail_mode=st.trail_mode, trail_value=st.trail_value, pattern_low=low,
-                  state="entering", entry_order=order_id, range_pct=self.range_pct(symbol))
+                  state="entering", entry_order=order_id, range_pct=self.range_pct(symbol),
+                  htf=self.htf(symbol))
         self.store.save_trade(t)
         self.open.append(t)
         self._since[t.id] = ts.astimezone(JST)

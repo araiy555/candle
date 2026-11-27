@@ -61,6 +61,7 @@ class Trade:
     holds: str = ""               # 買いの約定番号と株数（"E123:100,E124:300"）。返済する建玉の指定に使う
 
     range_pct: float | None = None   # 買った時点の、その銘柄の足の平均値幅率（%）。記録用
+    htf: str = ""                    # 買った時点の上位足の向き（例 '5:up,15:range'）。記録用
 
     def hold_list(self) -> list[tuple[str, int]]:
         return [(a, int(b)) for a, b in (x.split(":") for x in self.holds.split(",") if ":" in x)]

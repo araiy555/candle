@@ -11,6 +11,7 @@ from datetime import datetime
 from .bars import JST, in_continuous
 
 WEEK = "月火水木金土日"
+HTF = {"up": (0, "上昇"), "range": (1, "レンジ"), "down": (2, "下降"), "none": (3, "判定できず")}
 
 
 def _bucket(v, edges, unit="", fmt="{:g}"):
@@ -53,9 +54,10 @@ def analyze(db_path, mode: str = "paper", date_from: str | None = None, date_to:
         try:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(trades)")}
             extra = ", t.range_pct" if "range_pct" in cols else ", NULL AS range_pct"
+            htf = ", t.htf" if "htf" in cols else ", '' AS htf"
             trades = conn.execute(
                 f"SELECT t.id, t.strategy_id, t.symbol, t.signal_time, t.entry_time, t.entry_price, t.qty, "
-                f"t.initial_stop, t.high, t.exit_time, t.exit_price, t.exit_reason{extra} FROM trades t "
+                f"t.initial_stop, t.high, t.exit_time, t.exit_price, t.exit_reason{extra}{htf} FROM trades t "
                 f"WHERE t.mode=? AND t.exit_time IS NOT NULL ORDER BY t.exit_time", (mode,)).fetchall()
             sigs = {(r["strategy_id"], r["symbol"], r["time"]): r for r in conn.execute(
                 "SELECT strategy_id, symbol, time, price, vwap, drop_pct FROM signals WHERE mode=?", (mode,))}
@@ -83,6 +85,7 @@ def analyze(db_path, mode: str = "paper", date_from: str | None = None, date_to:
             pnl=move * t["qty"], r=move / risk if risk > 0 else 0.0, day=day, et=et,
             hold=(xt - et).total_seconds() / 60, symbol=t["symbol"], name=names.get(t["symbol"]),
             price=t["entry_price"], reason=t["exit_reason"] or "不明", strategy=t["strategy_id"],
+            htf=dict(x.split(":") for x in (t["htf"] or "").split(",") if ":" in x),
             stop_pct=stop_pct, range_pct=rng, stop_per_range=stop_pct / rng if rng else None,
             drop_pct=sig["drop_pct"] if sig else None,
             vwap_diff=(t["entry_price"] - sig["vwap"]) / sig["vwap"] * 100 if sig and sig["vwap"] else None,
@@ -104,6 +107,10 @@ def analyze(db_path, mode: str = "paper", date_from: str | None = None, date_to:
                "買値から最初の損切りラインまでの幅。狭すぎると少しの揺れで切られやすい。"),
         _group(rows, lambda r: _bucket(r["stop_per_range"], [1, 2, 3, 5], "倍"), "損切り幅÷足の平均値幅率",
                "損切り幅が、ふだんの足1本の値幅の何倍か。"),
+        _group(rows, lambda r: HTF.get(r["htf"].get("5"), (99, "記録なし")), "上位足（5分足）の向き別",
+               "買った時点の5分足の向き。波の高値・安値が切り上がっていれば上昇、切り下がっていれば下降。"),
+        _group(rows, lambda r: HTF.get(r["htf"].get("15"), (99, "記録なし")), "上位足（15分足）の向き別",
+               "買った時点の15分足の向き。寄り付きから時間がたっていないと、足が少なく判定できません。"),
         _group(rows, lambda r: (99, "記録なし") if r["vwap_diff"] is None else
                (0, "VWAPより下で買い") if r["vwap_diff"] < 0 else (1, "VWAP以上で買い"), "VWAPとの位置"),
         _group(rows, lambda r: _bucket(r["price"], [1000, 2000, 3000, 5000, 10000], "円", "{:,.0f}"), "株価帯別"),

@@ -63,7 +63,8 @@ class Store:
                           ("tick_group", "TEXT NOT NULL DEFAULT '10000'"),
                           ("exit_qty", "INTEGER NOT NULL DEFAULT 0"),
                           ("exit_value", "REAL NOT NULL DEFAULT 0"),
-                          ("holds", "TEXT NOT NULL DEFAULT ''"), ("range_pct", "REAL")):
+                          ("holds", "TEXT NOT NULL DEFAULT ''"), ("range_pct", "REAL"),
+                          ("htf", "TEXT NOT NULL DEFAULT ''")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {decl}")
         if "vwap" not in {r[1] for r in self.conn.execute("PRAGMA table_info(bars)")}:
@@ -106,6 +107,18 @@ class Store:
         rows = self.conn.execute(sql, args).fetchall()
         return [Bar(r[0], datetime.fromisoformat(r[2]).astimezone(JST), r[1], r[3], r[4], r[5],
                     r[6], r[7], r[8], bool(r[9]), r[10]) for r in reversed(rows)]
+
+    def prev_day(self, symbol: str, minutes: int, today: str) -> dict | None:
+        """保存してある足から、直前の営業日の高値・安値・終値を出す。無ければ None。"""
+        r = self.conn.execute(
+            "SELECT substr(start,1,10) d, MAX(high), MIN(low) FROM bars WHERE symbol=? AND minutes=? "
+            "AND substr(start,1,10)<? GROUP BY d ORDER BY d DESC LIMIT 1", (symbol, minutes, today)).fetchone()
+        if not r:
+            return None
+        close = self.conn.execute(
+            "SELECT close FROM bars WHERE symbol=? AND minutes=? AND substr(start,1,10)=? "
+            "ORDER BY start DESC LIMIT 1", (symbol, minutes, r[0])).fetchone()
+        return dict(day=r[0], high=r[1], low=r[2], close=close[0] if close else None)
 
     def save_watchlist(self, day: str, rows: list[dict]) -> None:
         self.conn.execute("DELETE FROM watchlist WHERE day=?", (day,))
@@ -164,7 +177,7 @@ class Store:
                    "qty", "initial_stop", "stop", "high", "exit_time", "exit_price", "exit_reason",
                    "trail_mode", "trail_value", "pattern_low", "state", "entry_order",
                    "stop_order", "exit_order", "server_stop", "tick_group", "exit_qty",
-                   "exit_value", "holds", "range_pct")
+                   "exit_value", "holds", "range_pct", "htf")
     _TIME_COLS = ("signal_time", "entry_time", "exit_time")
 
     def save_trade(self, t: Trade) -> None:

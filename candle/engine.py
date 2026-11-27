@@ -13,7 +13,7 @@ from datetime import datetime, time
 from .bars import JST, SESSIONS, Bar, in_continuous
 from types import SimpleNamespace
 
-from . import fvg, opening, sweep
+from . import fvg, mtf, opening, sweep
 from .flow import FlowDetector, FlowParams
 from .market import MarketMonitor
 from .patterns import (BOS_STRATEGY, FLOW_STRATEGY, FVG_STRATEGIES, OPEN_STRATEGY, STRATEGIES, STRATEGY_BY_ID, SWEEP_STRATEGY,
@@ -65,6 +65,7 @@ class PaperEngine:
         self.last_msg: dict[str, dict] = {}                # 銘柄ごとの最新の配信（記録に板などを残すため）
         # 寄り付き後の押し目買い（厚い買い板を背に、数ティック上を狙う）。通知と記録のみ
         self.opening = opening.OpenTracker() if OPEN_STRATEGY in wanted else None
+        self.prev_days: dict[str, dict] = {}
         self.open_active: list[dict] = []                  # 目標・損切りのどちらに先に届くかを見ている検知
         want_flow = (FLOW_STRATEGY in wanted or self.walls is not None or self.sweep_on
                      or self.opening is not None or bool(wanted & set(FVG_STRATEGIES.values())))
@@ -114,6 +115,9 @@ class PaperEngine:
             self.history[sym].extend(bars)
             if bars:
                 self.prices.setdefault(sym, bars[-1].close)
+            prev = self.store.prev_day(sym, minutes, today.isoformat())
+            if prev:
+                self.prev_days[sym] = prev     # 前日の高値・安値（上位足の流動性として表示する）
 
     # --- 入力 ---------------------------------------------------------------
     def on_bar(self, bar: Bar) -> None:
@@ -180,6 +184,11 @@ class PaperEngine:
         if len(bars) < 5:
             return None
         return sum((b.high - b.low) / b.close for b in bars) / len(bars) * 100
+
+    def htf(self, symbol: str) -> str:
+        """上位足（5分足・15分足）の向き。取引の記録用。"""
+        bars = contiguous_tail(list(self.history.get(symbol, ())))
+        return mtf.code(bars, bars[0].minutes) if bars else ""
 
     def is_ranging(self, symbol: str) -> bool:
         """値動きが小さい（レンジ）か。足の平均値幅率が設定の下限より小さいとき。足が足りなければ False。"""
@@ -468,7 +477,7 @@ class PaperEngine:
             return
         t = Trade(self.mode, strategy_id, symbol, sig_time, ts, entry, qty, stop, stop, high=entry,
                   trail_mode=st.trail_mode, trail_value=st.trail_value, pattern_low=low,
-                  range_pct=self.range_pct(symbol))
+                  range_pct=self.range_pct(symbol), htf=self.htf(symbol))
         self.store.save_trade(t)
         self.open.append(t)
         log.info("仮想買い %s %s %d株 @%.1f 損切り%.1f", strategy_id, symbol, qty, entry, stop)
@@ -528,22 +537,28 @@ class PaperEngine:
         self.settings = TradeSettings.from_dict({**vars(self.settings), **data})
         self.apply_sizing()
 
-    def chart_data(self, symbol: str) -> dict:
-        """チャート表示用の当日の足。管理画面のスレッドから呼ばれる。"""
+    def chart_data(self, symbol: str, tf: int | None = None) -> dict:
+        """チャート表示用の当日の足。tf を指定すると、その分足にまとめて返す。管理画面のスレッドから呼ばれる。"""
         for _ in range(3):
             try:
-                bars = list(self.history.get(symbol, ()))
+                base = list(self.history.get(symbol, ()))
                 break
             except RuntimeError:   # 追加と読み出しが重なった場合はやり直す
-                bars = []
-        return dict(symbol=symbol, name=self.names.get(symbol),
-                    minutes=bars[0].minutes if bars else None,
+                base = []
+        minutes = base[0].minutes if base else None
+        frames = mtf.summary(contiguous_tail(base), minutes) if base else []
+        bars = base
+        if base and tf and tf > minutes and tf % minutes == 0:
+            bars, minutes = mtf.aggregate(base, tf), tf
+        tail = contiguous_tail(bars[-200:]) if bars else []
+        return dict(symbol=symbol, name=self.names.get(symbol), minutes=minutes,
+                    base_minutes=base[0].minutes if base else None, frames=frames,
+                    prev_day=self.prev_days.get(symbol),
                     quote=self.quotes.get(symbol),
                     range_pct=self.range_pct(symbol), day_range_pct=self.day_range_pct(symbol),
-                    structure=fvg.structure(contiguous_tail(bars[-200:]), self.fvg_params) if bars else None,
-                    liquidity=sweep.liquidity_levels(contiguous_tail(bars[-200:]), self.sweep_params) if bars else [],
+                    structure=fvg.structure(tail, self.fvg_params) if bars else None,
+                    liquidity=sweep.liquidity_levels(tail, self.sweep_params) if bars else [],
                     pools=[dict(t=tail[i].start.isoformat(), level=lv)
-                           for tail in [contiguous_tail(bars[-200:])]
                            for i, lv in sweep.pools(tail, self.sweep_params)] if bars else [],
                     bars=[dict(t=b.start.isoformat(), o=b.open, h=b.high, l=b.low, c=b.close,
                                v=b.volume, ok=b.complete, vwap=b.vwap) for b in bars])

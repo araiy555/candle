@@ -94,6 +94,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <a id="l1" target="_blank" rel="noopener">Yahoo!ファイナンス</a><a id="l2" target="_blank" rel="noopener">TradingView</a><a id="l3" target="_blank" rel="noopener">株探</a>
 <span style="flex:1"></span><button id="close">閉じる</button></div>
 <div class="kpis" id="qinfo" style="padding:10px 16px 0;gap:18px"></div>
+<div id="mtf" style="padding:10px 16px 0;font-size:13px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>
 <div style="padding:6px 16px 0;font-size:12px" class="mut"><span style="display:inline-block;width:22px;border-top:2px solid var(--acc);vertical-align:middle;margin-right:5px"></span>VWAP（受信した値。受信前の時間帯は線がありません）</div>
 <div style="padding:4px 16px 0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px" class="mut"><span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--up);vertical-align:middle;margin-right:5px"></span>直近の上昇の範囲（中央の線より上が割高ゾーン、下が割安ゾーン）</span><span><span style="display:inline-block;width:18px;height:8px;background:var(--warn);opacity:.75;vertical-align:middle;margin-right:5px"></span>上昇中の出来高の分布</span><span><span style="display:inline-block;width:18px;border-top:2px dashed var(--fg);vertical-align:middle;margin-right:5px"></span>上昇中のPOC</span><span><span style="display:inline-block;width:18px;height:8px;border:1.5px solid var(--warn);vertical-align:middle;margin-right:5px"></span>FVG</span><span><span style="display:inline-block;width:18px;border-top:2px solid #d4a700;vertical-align:middle;margin-right:5px"></span>上昇前のレンジのPOC</span><span><span style="display:inline-block;width:18px;height:0;border-top:3px solid var(--up);vertical-align:middle;margin-right:5px"></span>外部流動性（当日の高値・安値、大きな波の高値・安値）</span><span><span style="display:inline-block;width:18px;height:0;border-top:1px dashed var(--warn);vertical-align:middle;margin-right:5px"></span>内部流動性（その内側の小さな波。まだ抜かれていないもの）</span></div>
 <div class="chart"><svg id="svg" role="img"></svg><div class="tip" id="tip"></div></div>
@@ -111,7 +112,7 @@ function table(el,heads,rows,empty){
   $(el).innerHTML='<table><thead><tr>'+heads.map(h=>`<th>${h}</th>`).join('')+'</tr></thead><tbody>'+
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
-let halted=false,state=null,cur=null,formLoaded=false;let curDay=null,curTrade=null;const dayOf=t=>new Date(t).toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});const closing=new Set();
+let halted=false,state=null,cur=null,formLoaded=false;let curDay=null,curTrade=null,curTf=0;const dayOf=t=>new Date(t).toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});const closing=new Set();
 const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_price','min_range_pct','vwap_rule','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth','notify_on'];
 function vdiff(price,vwap){if(price==null||!vwap)return '<span class="mut">-</span>';const d=(price-vwap)/vwap*100;return `<span class="${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${n(d,2)}%</span>`}
 function vcell(price,vwap){return vwap?`${n(vwap,1)} <span style="font-size:12px">(${vdiff(price,vwap)})</span>`:'<span class="mut">-</span>'}
@@ -220,6 +221,10 @@ function draw(data){
     svg.appendChild(el('rect',{x:x0,y:up?py-th:py,width:(W-R)-x0,height:th,fill:col,'fill-opacity':ext?.22:.12}));
     svg.appendChild(el('line',{x1:x0,x2:W-R,y1:py,y2:py,stroke:col,'stroke-width':ext?2.5:1,'stroke-dasharray':ext?'none':'4 3'}));
     svg.appendChild(el('text',{x:(W-R)-4,y:up?py-th-3:py+th+11,'text-anchor':'end',fill:col,'font-size':ext?12:11,'font-weight':ext?700:400,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},(ext?'外部流動性':'内部流動性')+(up?'（上）':'（下）')+' '+fmt(q.level)))}
+  // 前日の高値・安値（上位足の外部流動性）。今の表示範囲に入るときだけ線を引く
+  if(data.prev_day)for(const [v,label] of [[data.prev_day.high,'前日高値'],[data.prev_day.low,'前日安値']]){if(v==null||v<=lo||v>=hi)continue;
+    svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(v),y2:y(v),stroke:'var(--fg)','stroke-width':2,'stroke-dasharray':'10 5'}));
+    svg.appendChild(el('text',{x:L+4,y:y(v)-4,fill:'var(--fg)','font-size':12,'font-weight':700,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},label+'（上位足の外部流動性） '+fmt(v)))}
   const w=Math.max(1,Math.min(14,bw*0.7));
   // 出来高（株価とは別の枠。縦軸は共有しない）
   const vTop=H-26-VH,vBot=H-26,vmax=Math.max(...bars.map(b=>b.v),1),vy=v=>vBot-(v/vmax)*VH;
@@ -260,23 +265,28 @@ function draw(data){
     tip.style.display='block';const tx=x(i)*r.width/W;tip.style.left=(tx>r.width/2?tx-tip.offsetWidth-4:tx+20)+'px';tip.style.top='20px'};
   hit.onmouseleave=()=>{cross.setAttribute('opacity',0);tip.style.display='none'};
 }
-async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?symbol='+encodeURIComponent(cur)+(curDay?'&day='+curDay:''))).json()}catch(e){return}
+async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?symbol='+encodeURIComponent(cur)+(curDay?'&day='+curDay:'')+(curTf?'&tf='+curTf:''))).json()}catch(e){return}
   if(d.symbol!==cur)return;$('dt').textContent=`${d.symbol} ${d.name||''}`;
   const q=d.quote||{},m=v=>v==null?'<span class="mut">-</span>':null;
   $('qinfo').innerHTML=[['現在値',m(q.CurrentPrice)||n(q.CurrentPrice,1)+'円'],['前日比',m(q.ChangePreviousClose)||`<span class="${q.ChangePreviousClose>0?'pos':q.ChangePreviousClose<0?'neg':''}">${q.ChangePreviousClose>0?'+':''}${n(q.ChangePreviousClose,1)}円（${q.ChangePreviousClosePer>0?'+':''}${n(q.ChangePreviousClosePer,2)}%）</span>`],
     ['VWAP',m(q.VWAP)||n(q.VWAP,1)+'円'],['VWAPとの差',vdiff(q.CurrentPrice,q.VWAP)],['始値',m(q.OpeningPrice)||n(q.OpeningPrice,1)],['高値',m(q.HighPrice)||n(q.HighPrice,1)],['安値',m(q.LowPrice)||n(q.LowPrice,1)],
     ['足の平均値幅率',rng(d.range_pct)],['当日の値幅率',rng(d.day_range_pct)],['出来高',m(q.TradingVolume)||n(q.TradingVolume)+'株'],['売買代金',m(q.TradingValue)||n(q.TradingValue/1e8,1)+'億円']].map(([k,v])=>`<div><span>${k}</span><b style="font-size:15px">${v}</b></div>`).join('');
   $('note').textContent=`${d.minutes||''}分足・当日分（このプログラムが起動中に受信した足）。赤=陽線、緑=陰線、薄い足=データ欠落を含む足。▲と点線はサインとパターン安値。下の棒は1本ごとの出来高。足の平均値幅率は、直近30本の（高値−安値）÷終値の平均。`;
+  const TC={up:'pos',down:'neg'},fr=d.frames||[],pd=d.prev_day;
+  $('mtf').innerHTML=(fr.length?'<span class="mut">足の切り替え</span>'+fr.map(f=>`<button data-tf="${f.minutes===d.base_minutes?0:f.minutes}" style="padding:3px 10px${(curTf||d.base_minutes)===f.minutes?';border-color:var(--acc);color:var(--acc);font-weight:700':''}">${f.minutes}分足</button>`).join('')+
+    '<span class="mut" style="margin-left:10px">向き</span>'+fr.map(f=>`<span>${f.minutes}分足 <b class="${TC[f.trend]||'mut'}">${esc(f.label)}</b></span>`).join('<span class="mut">／</span>'):'')+
+    (pd?`<span class="mut" style="margin-left:10px">前日（${pd.day.slice(5)}）</span><span>高値 <b>${n(pd.high,1)}</b>　安値 <b>${n(pd.low,1)}</b>　終値 <b>${n(pd.close,1)}</b></span>`:'');
   const tt=(state?.history||[]).find(t=>t.id===curTrade),hmm=s=>new Date(s).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'});
   $('tinfo').innerHTML=tt?`<b>この取引</b>　${md(tt.entry_time)} 買 ${n(tt.entry_price,1)} → ${hmm(tt.exit_time)} 売 ${n(tt.exit_price,1)}　${yen(tt.pnl)}　<span class="mut">${esc(tt.reason||'')}／最初の損切り ${n(tt.initial_stop,1)}／${n(tt.qty)}株</span>`+(d.bars.length?'':'　<span class="warn">この日の足が保存されていません</span>'):'';
   if(d.day)$('note').textContent=`${d.minutes||''}分足・${d.day} の保存済みの足。青い丸が買い、赤（利益）または緑（損失）の丸が売りで、線でつないでいます。`;
   else $('note').textContent+=' 青い丸が買い、赤（利益）・緑（損失）の丸が売り。';
   if(!$('tip').style.display||$('tip').style.display==='none')draw(d)}
-function openChart(sym,trade){cur=sym;curTrade=trade?trade.id:null;curDay=trade?dayOf(trade.entry_time):null;$('tinfo').innerHTML='';$('l1').href=`https://finance.yahoo.co.jp/quote/${sym}.T/chart`;$('l2').href=`https://jp.tradingview.com/chart/?symbol=TSE%3A${sym}`;
+function openChart(sym,trade){cur=sym;curTf=0;$('mtf').innerHTML='';curTrade=trade?trade.id:null;curDay=trade?dayOf(trade.entry_time):null;$('tinfo').innerHTML='';$('l1').href=`https://finance.yahoo.co.jp/quote/${sym}.T/chart`;$('l2').href=`https://jp.tradingview.com/chart/?symbol=TSE%3A${sym}`;
   $('l3').href=`https://kabutan.jp/stock/chart?code=${sym}`;$('copy').textContent='銘柄コードをコピー';$('kmsg').textContent='';$('svg').innerHTML='';$('dt').textContent=sym;$('dlg').showModal();chart()}
 document.addEventListener('click',async e=>{const c=e.target.closest('[data-close]');if(c){if(!confirm(c.dataset.label+' を成行で決済します。よろしいですか？'))return;
   const id=Number(c.dataset.close);closing.add(id);await fetch('/api/close?id='+id,{method:'POST'});load();return}
   const k=e.target.closest('[data-kabu]');if(k){const r=await kabu(k.dataset.kabu);if(r&&!r.ok)alert(r.message);return}
+  const tfb=e.target.closest('[data-tf]');if(tfb){curTf=Number(tfb.dataset.tf);$('tip').style.display='none';chart();return}
   const tr=e.target.closest("[data-tid]");if(tr){const t=(state?.history||[]).find(t=>String(t.id)===tr.dataset.tid);if(t)openChart(t.symbol,t);return}
   const b=e.target.closest('[data-sym]');if(b)openChart(b.dataset.sym)});
 async function kabu(sym,msgEl){if(msgEl)msgEl.textContent='切り替え中…';try{const r=await (await fetch('/api/kabu-chart?symbol='+encodeURIComponent(sym),{method:'POST'})).json();
@@ -349,9 +359,11 @@ def start_web(target, port: int = 8765, data_dir=None, db_path=None) -> Threadin
                 if not symbol.isalnum():
                     return self._send(b"bad symbol", "text/plain", 400)
                 data = None
+                tf = q.get("tf", [""])[0]
+                tf = int(tf) if tf.isdigit() and int(tf) in (5, 15) else None
                 if day and day != datetime.now(JST).strftime("%Y-%m-%d"):
                     data = past_chart(db_path, symbol, day, cur().names.get(symbol))   # 過去の日は保存した足から
-                self._send(json.dumps(data or cur().chart_data(symbol), ensure_ascii=False).encode("utf-8"),
+                self._send(json.dumps(data or cur().chart_data(symbol, tf), ensure_ascii=False).encode("utf-8"),
                            "application/json")
             elif self.path.split("?")[0] == "/analysis":
                 from . import analysis
