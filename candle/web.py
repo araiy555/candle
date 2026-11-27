@@ -185,7 +185,7 @@ function draw(data){
   const svg=$('svg'),tip=$('tip'),bars=data.bars;svg.innerHTML='';tip.style.display='none';
   const W=svg.clientWidth||900,H=460,L=8,R=64,T=14,VH=84,VG=22,B=26+VH+VG;svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
   if(!bars.length){svg.appendChild(el('text',{x:W/2,y:H/2,'text-anchor':'middle',fill:'var(--mut)','font-size':13},'まだ足がありません（起動後に確定した足から表示します）'));return}
-  const many=(data.minutes||0)>=60,bday=dayOf(bars[0].t),marks=(state?.signals||[]).filter(s=>s.symbol===data.symbol&&(many||dayOf(s.time)===bday));
+  const many=(data.minutes||0)>=60,bday=dayOf(bars[0].t),marks=many?[]:(state?.signals||[]).filter(s=>s.symbol===data.symbol&&dayOf(s.time)===bday);   // 1時間足では、短い足のサインの印は出さない
   // この銘柄のその日の売買（決済済みと保有中）。どこで買ってどこで売ったかを重ねて描く
   const trs=[...(state?.history||[]),...(state?.positions||[])].filter(t=>t.symbol===data.symbol&&t.entry_time&&(many||dayOf(t.entry_time)===bday));
   const selT=trs.find(t=>t.id===curTrade);

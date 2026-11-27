@@ -4,8 +4,8 @@
 チャートでの切り替え表示と、取引の記録（後で「長い足が上向きのときの成績」を比べる）に使う。
 
 向きの決め方（波の高値・安値の切り上げ・切り下げ）:
-  上昇   : 直近の波の高値も安値も、その前より高い
-  下降   : 直近の波の高値も安値も、その前より安い
+  上昇   : 直近の終値が最後の波の高値を上に抜けた。または、直近の波の高値も安値も、その前より高い
+  下降   : 直近の終値が最後の波の安値を下に抜けた。または、直近の波の高値も安値も、その前より安い
   レンジ : それ以外
 """
 from __future__ import annotations
@@ -23,6 +23,10 @@ def aggregate(bars: Sequence[Bar], minutes: int) -> list[Bar]:
     out: list[Bar] = []
     for b in bars:
         start = b.start.replace(minute=b.start.minute - b.start.minute % minutes, second=0, microsecond=0)
+        if minutes == 60 and (b.start.hour, b.start.minute) >= (12, 30):
+            # 1時間足の後場は、12:30 から1時間ごとに区切る（12:30〜、13:30〜、14:30〜。一般的なチャートと同じ）
+            k = (b.start.hour * 60 + b.start.minute - 750) // 60
+            start = b.start.replace(hour=(750 + k * 60) // 60, minute=30, second=0, microsecond=0)
         if out and out[-1].start == start:
             a = out[-1]
             a.high, a.low, a.close = max(a.high, b.high), min(a.low, b.low), b.close
@@ -54,6 +58,12 @@ def trend(bars: Sequence[Bar], pivot: int = 2) -> str | None:
             lo_at = i
     if len(highs) < 2 or len(lows) < 2:
         return None
+    # 直近の終値が、最後の波の高値を上に抜けていれば上昇へ、安値を下に抜けていれば下降へ転換したとみなす
+    last = bars[-1].close
+    if last > highs[-1]:
+        return "up"
+    if last < lows[-1]:
+        return "down"
     if highs[-1] > highs[-2] and lows[-1] > lows[-2]:
         return "up"
     if highs[-1] < highs[-2] and lows[-1] < lows[-2]:

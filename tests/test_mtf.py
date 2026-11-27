@@ -130,3 +130,14 @@ def test_chart_shows_last_trading_day_when_today_has_no_bars(tmp_path):
     assert (c["shown_day"], c["live"], len(c["bars"])) == ("2026-11-30", True, 1)
     assert c["prev_day"] == dict(day="2026-11-27", high=1142, low=1099, close=1140)
     assert len(e.chart_data("T", 60)["bars"]) == 3 and "T" not in e.last_day
+
+
+def test_hourly_bars_follow_the_session_and_trend_turns_on_a_break():
+    day = make_bars([(100, 101, 99, 100)] * 330, "T", start=(9, 0), minutes=1)       # 9:00〜15:30
+    hours = [(b.start.hour, b.start.minute) for b in mtf.aggregate(day, 60)]
+    assert hours == [(9, 0), (10, 0), (11, 0), (12, 30), (13, 30), (14, 30)]
+    down = wave([122, 112, 118, 106, 113, 100, 106])                                 # 切り下げ → 下降
+    assert mtf.trend(down) == "down"
+    turned = wave([122, 112, 118, 106, 113, 100, 106, 120])                          # 最後の波の高値 113 を上に抜けた
+    assert mtf.trend(turned) == "up"
+    assert mtf.trend(wave([100, 110, 104, 116, 109, 122, 115, 100])) == "down"       # 逆も同じ
