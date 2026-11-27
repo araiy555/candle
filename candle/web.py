@@ -256,7 +256,7 @@ function draw(data){
     const py=y(m.pattern_low);
     svg.appendChild(el('line',{x1:x(i)-bw,x2:W-R,y1:py,y2:py,stroke:'var(--fg)','stroke-width':1,'stroke-dasharray':'4 3',opacity:.6}));
     svg.appendChild(el('path',{d:`M${x(i)},${py+6} l6,10 h-12 z`,fill:'var(--fg)'}));
-    const right=x(i)+140>W-R;svg.appendChild(el('text',{x:x(i)+(right?-10:10),y:py+17,'text-anchor':right?'end':'start',fill:'var(--fg)','font-size':11},`${m.strategy} 安値 ${fmt(m.pattern_low)}`))}
+    const right=x(i)+140>W-R;place(x(i)+(right?-10:10),py+17,right?'end':'start','var(--fg)',false,`${m.strategy} ${fmt(m.pattern_low)}`)}
   const bi=t=>{const v=Date.parse(t);return bars.findIndex(b=>v>=Date.parse(b.t)&&v<Date.parse(b.t)+ms)};
   const halo={stroke:'var(--card)','stroke-width':4,'paint-order':'stroke'};
   for(const t of trs){const i=bi(t.entry_time),j=t.exit_time?bi(t.exit_time):-1;if(i<0)continue;const sel=t===selT,done=t.exit_time&&j>=0;
