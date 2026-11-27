@@ -10,7 +10,7 @@ from dataclasses import replace
 from collections import defaultdict, deque
 from datetime import datetime, time
 
-from .bars import JST, SESSIONS, Bar
+from .bars import JST, SESSIONS, Bar, in_continuous
 from types import SimpleNamespace
 
 from . import fvg, opening, sweep
@@ -374,6 +374,10 @@ class PaperEngine:
             self.squeeze_log.on_tick(symbol, msg, now, *self.flow.last_trade)
         cheap = (msg.get("CurrentPrice") or 0) < self.settings.min_price
         if cheap:
+            return
+        if not in_continuous(now):
+            if self.walls is not None:
+                self.walls.walls.pop(symbol, None)   # 昼休みなどをまたいで売り板を追わない
             return
         self._check_opening(symbol, msg, now)     # 寄り付き直後は足が少なく、レンジの判定はしない
         if self.is_ranging(symbol):

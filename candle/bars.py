@@ -21,6 +21,17 @@ SESSIONS: tuple[tuple[time, time], ...] = (
 )
 
 
+
+def in_continuous(ts: datetime) -> bool:
+    """売買が続けて成立している時間帯か（9:00〜11:30、12:30〜15:25）。
+
+    昼休みや引け前の注文受付（15:25〜15:30）の板は、売買が成立しない状態の気配なので、
+    板を使う判定（スクイーズ・売り板・寄り付き押し目）の対象にしない。
+    """
+    t = ts.astimezone(JST).time()
+    return time(9, 0) <= t < time(11, 30) or time(12, 30) <= t < time(15, 25)
+
+
 @dataclass
 class Bar:
     symbol: str

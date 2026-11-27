@@ -84,3 +84,25 @@ def test_analyze_signals_compares_kinds_in_expected_direction(tmp_path):
     assert analysis._verdict(40, 0.05, 0.04) == "見込みあり" and analysis._verdict(40, -0.05, -0.02) == "見込み薄"
     assert analysis._verdict(40, 0.01, 0.02) == "どちらとも言えない"
     assert analysis.analyze_signals(tmp_path / "none.sqlite")["kinds"] == []
+
+
+def test_board_signals_only_in_continuous_trading_hours(tmp_path):
+    from candle.bars import in_continuous
+    at = lambda h, m: datetime(2026, 11, 27, h, m, tzinfo=JST)
+    assert [in_continuous(at(*x)) for x in ((8, 59), (9, 0), (11, 29), (11, 30), (12, 15), (12, 30), (15, 24),
+                                           (15, 25))] == [False, True, True, False, False, True, True, False]
+    import sys
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+    from test_opening import board
+    from candle.engine import PaperEngine
+    from candle.risk import RiskLimits, RiskManager
+    store, sent = Store(tmp_path / "c.sqlite"), []
+    e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"}, trade_enabled=False,
+                    notify=lambda *a: sent.append(a), notify_ids={"open_dip", "wall_break"})
+    e.opening.p.end = at(13, 0).time()                       # 時間帯の判定だけを見るため、対象時間を広げる
+    e.on_board("7203", board(1000, 1000), at(12, 10))        # 昼休みの気配
+    e.on_board("7203", board(1000, 1000), at(12, 10) + timedelta(seconds=5))
+    assert sent == [] and e.walls.walls == {}
+    e.on_board("7203", board(1000, 1000), at(12, 40))
+    e.on_board("7203", board(1000, 1000), at(12, 40) + timedelta(seconds=5))
+    assert len(sent) == 1

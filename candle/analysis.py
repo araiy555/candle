@@ -8,7 +8,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 
-from .bars import JST
+from .bars import JST, in_continuous
 
 WEEK = "月火水木金土日"
 
@@ -181,9 +181,13 @@ def analyze_signals(db_path, date_from: str | None = None, date_to: str | None =
 
     days = sorted({e["time"][:10] for e in events}, reverse=True)
     buckets: dict = {}
+    skipped = 0
     for e in events:
         day = e["time"][:10]
         if (date_from and day < date_from) or (date_to and day > date_to) or not e["price"]:
+            continue
+        if not in_continuous(datetime.fromisoformat(e["time"])):
+            skipped += 1      # 昼休み・引け前の気配で出た検知（以前の版の記録）。値動きの比較から除く
             continue
         m = json.loads(e["metrics"] or "{}")
         key = (e["kind"], m.get("outcome") if e["kind"] in ("fvg", "wall") else None)
@@ -240,7 +244,7 @@ def analyze_signals(db_path, date_from: str | None = None, date_to: str | None =
             oc = [r["m"].get("outcome") for r in rows]
             item["open"] = {k: oc.count(k) for k in ("target", "stop", "timeout")}
         out.append(item)
-    return dict(kinds=out, days=days, take=take, cut=cut, min_n=MIN_N)
+    return dict(kinds=out, days=days, take=take, cut=cut, min_n=MIN_N, skipped=skipped)
 
 
 PAGE = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
@@ -281,7 +285,7 @@ async function loadSignals(day){
   if(!daysLoaded){$('day').innerHTML='<option value="all">すべての日</option>'+(d.days||[]).map(x=>`<option>${x}</option>`).join('');daysLoaded=true}
   $('msg').textContent=d.error||'';
   const V={'見込みあり':'pos','見込み薄':'neg'};
-  $('signote').innerHTML=`騰落率は検知したときの株価からの変化で、<b>見込む方向にそろえています</b>（FVG割れは下がればプラス）。「試算」は、検知の株価で入り、+${d.take}% か −${d.cut}% のどちらかに先に届いたら手じまい、届かなければ5分後に手じまう場合の1回あたりの平均です。手数料・すべり・実際にその値段で買えたかは含みません。判定は、試算できた件数が${d.min_n}件以上のときだけ出す目安です。`;
+  $('signote').innerHTML=`騰落率は検知したときの株価からの変化で、<b>見込む方向にそろえています</b>（FVG割れは下がればプラス）。「試算」は、検知の株価で入り、+${d.take}% か −${d.cut}% のどちらかに先に届いたら手じまい、届かなければ5分後に手じまう場合の1回あたりの平均です。手数料・すべり・実際にその値段で買えたかは含みません。判定は、試算できた件数が${d.min_n}件以上のときだけ出す目安です。`+(d.skipped?`<br>昼休み（11:30〜12:30）と引け前（15:25以降）に出ていた検知 ${d.skipped}件は、売買が成立しない時間の気配によるものなので、集計から除いています。`:'');
   $('sigs').innerHTML='<table><thead><tr><th>種類</th><th>件数</th><th>1分後</th><th>3分後</th><th>5分後</th><th>5分後に上／下</th><th>最大の伸び</th><th>最大の逆行</th><th>試算：1回あたり</th><th>利確／損切り</th><th>判定（目安）</th></tr></thead><tbody>'+
     d.kinds.map(k=>k.n?`<tr${k.sim.n<d.min_n?' class="few"':''}><td>${esc(k.label)}${k.open?`<br><span class="mut" style="font-size:12px">目標に到達 ${k.open.target}／損切り ${k.open.stop}／届かず ${k.open.timeout}</span>`:''}</td><td>${k.n}</td><td>${pc(k.h60.avg)}</td><td>${pc(k.h180.avg)}</td><td>${pc(k.h300.avg)}</td><td>${sh(k.h300.win)}／${sh(k.h300.lose)}</td><td>${pc(k.max_fav)}</td><td>${pc(k.max_adv)}</td><td><b>${pc(k.sim.avg)}</b> <span class="mut">(${k.sim.n})</span></td><td>${sh(k.sim.take)}／${sh(k.sim.cut)}</td><td class="${V[k.verdict]||'mut'}">${esc(k.verdict)}</td></tr>`
       :`<tr class="few"><td>${esc(k.label)}</td><td>0</td><td colspan="8" style="text-align:left" class="mut">まだ記録がありません</td><td class="mut">データ不足</td></tr>`).join('')+'</tbody></table>';
