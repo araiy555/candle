@@ -348,7 +348,7 @@ def test_no_signals_during_quiet_period_after_the_open():
     assert not e.in_quiet_open(T0.replace(hour=12, minute=31))    # 後場の寄り付きは対象外
 
 
-def test_vwap_is_shown_but_not_used_as_a_condition():
+def test_vwap_is_shown_and_blocks_buys_below_it():
     from candle.collector import Pipeline
     store = Store(":memory:")
     rm = RiskManager(RiskLimits())
@@ -365,7 +365,13 @@ def test_vwap_is_shown_but_not_used_as_a_condition():
     assert bar.vwap == 1049.5                                    # 足の確定時点のVWAPを保存
     assert e.vwap("T") == 1049.0 and e.quotes["T"]["HighPrice"] == 1100
     assert e.chart_data("T")["quote"]["VWAP"] == 1049.0 and e.chart_data("T")["bars"][0]["vwap"] == 1049.5
-    t0 = feed_hammer(e, "T")                                     # VWAPより下でもサインは出て買う
+    assert e.settings.vwap_rule == "above"
+    t0 = feed_hammer(e, "T")                                     # VWAPより下では、サインは出るが買わない
+    e.on_price("T", 1006, t0)
+    assert e.open == [] and store.recent_signals("paper")[0]["action"] == "VWAPより下"
+    e.update_settings({"vwap_rule": "off"})                      # VWAPを見ない設定なら買う
+    e.seen.clear()
+    t0 = feed_hammer(e, "T")
     e.on_price("T", 1006, t0)
     assert len(e.open) == 1 and store.recent_signals("paper")[0]["vwap"] == 1049.0
     e.on_clock(t0)

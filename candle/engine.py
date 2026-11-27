@@ -479,6 +479,9 @@ class PaperEngine:
         self.apply_sizing()
         if self.market_state(ts)["halt"]:
             return 0, "地合い悪化で新規停止中"
+        vwap, px = self.vwap(symbol), self.prices.get(symbol, entry)
+        if self.settings.vwap_rule == "above" and vwap and px < vwap:
+            return 0, "VWAPより下"     # 下げている途中の一時的な止まりであることが多い（VWAPが分からなければ見送らない）
         unreal = sum(t.pnl(self.prices.get(t.symbol, t.entry_price)) for t in self.open)
         return self.risk.check_entry(strategy_id, symbol, entry, stop, self.open, unreal)
 

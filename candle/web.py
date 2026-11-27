@@ -75,6 +75,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <div><label for="quiet_open_min">寄り付き後に待つ時間（分）　この間は通知も売買もしない</label><div class="row"><input id="quiet_open_min" type="number" step="1" min="0" style="width:100%"></div></div>
 <div><label for="min_price">株価の下限（円）　これより安い銘柄は通知も売買もしない。0＝除かない</label><div class="row"><input id="min_price" type="number" step="50" min="0" style="width:100%"></div></div>
 <div><label for="min_range_pct">足の平均値幅率の下限（%）　これ未満は値動きが小さい（レンジ）として通知も売買もしない。0＝除かない</label><div class="row"><input id="min_range_pct" type="number" step="0.01" min="0" style="width:100%"></div></div>
+<div><label for="vwap_rule">VWAPの条件（売買のみ。通知はそのまま）</label><div class="row"><select id="vwap_rule" style="width:100%"><option value="above">VWAPより下では買わない</option><option value="off">VWAPを見ない</option></select></div></div>
 <div><label for="min_drop_pct">直前の下落率の下限（%）　これ未満の下げは毛抜き底と見なさない。0＝除かない</label><div class="row"><input id="min_drop_pct" type="number" step="0.05" min="0" style="width:100%"></div></div>
 <div><label for="mkt_fut_drop">地合い：先物が5分でこの%以上下げたら「警戒」</label><div class="row"><input id="mkt_fut_drop" type="number" step="0.05" min="0" style="width:100%"></div></div>
 <div><label for="mkt_topix_drop">地合い：TOPIXも5分でこの%以上下げたら「警戒強化」</label><div class="row"><input id="mkt_topix_drop" type="number" step="0.05" min="0" style="width:100%"></div></div>
@@ -111,7 +112,7 @@ function table(el,heads,rows,empty){
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
 let halted=false,state=null,cur=null,formLoaded=false;let curDay=null,curTrade=null;const dayOf=t=>new Date(t).toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});const closing=new Set();
-const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_price','min_range_pct','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth','notify_on'];
+const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_price','min_range_pct','vwap_rule','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth','notify_on'];
 function vdiff(price,vwap){if(price==null||!vwap)return '<span class="mut">-</span>';const d=(price-vwap)/vwap*100;return `<span class="${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${n(d,2)}%</span>`}
 function vcell(price,vwap){return vwap?`${n(vwap,1)} <span style="font-size:12px">(${vdiff(price,vwap)})</span>`:'<span class="mut">-</span>'}
 const rng=v=>v==null?'<span class="mut">-</span>':n(v,2)+'%';
