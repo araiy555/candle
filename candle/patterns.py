@@ -208,8 +208,8 @@ STRATEGIES: tuple[Strategy, ...] = (
     Strategy("liq_sweep", "流動性スイープ", lambda bars, p: None),
     # 寄り付き後の押し目買い（opening.py が判定する）。通知のみ。
     Strategy("open_dip", "寄り付き押し目", lambda bars, p: None),
-    # 上へのブレイク（BOS）の後、割安ゾーンで内部流動性を刈って戻した形（sweep.py が判定する）。通知のみ。
-    Strategy("bos_dip", "BOS後の押し目", lambda bars, p: None),
+    # 高値ブレイクの後、割安ゾーンで内部流動性を刈って戻した形（sweep.py が判定する）。通知のみ。
+    Strategy("bos_dip", "内部流動性ブレイク", lambda bars, p: None),
 )
 BOS_STRATEGY = "bos_dip"
 OPEN_STRATEGY = "open_dip"

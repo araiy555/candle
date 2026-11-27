@@ -139,9 +139,9 @@ SWEEP_TAG = lambda **want: (lambda m: all(m.get(k) == v for k, v in want.items()
 SIGNAL_KINDS = [
     ("squeeze", None, "スクイーズ", 1),
     ("sweep", None, "流動性スイープ（すべて）", 1),
-    ("sweep", SWEEP_TAG(bos_setup=True), "　└ BOS後の押し目（BOS後＋割安ゾーン）", 1),
-    ("sweep", SWEEP_TAG(after_bos=True), "　└ BOSの後", 1),
-    ("sweep", SWEEP_TAG(after_bos=False), "　└ BOSなし", 1),
+    ("sweep", SWEEP_TAG(bos_setup=True), "　└ 内部流動性ブレイク（高値ブレイク後＋割安ゾーン＋内部流動性）", 1),
+    ("sweep", SWEEP_TAG(after_bos=True), "　└ 高値ブレイクの後", 1),
+    ("sweep", SWEEP_TAG(after_bos=False), "　└ 高値ブレイクなし", 1),
     ("sweep", SWEEP_TAG(zone="discount"), "　└ 割安ゾーン", 1),
     ("sweep", SWEEP_TAG(zone="premium"), "　└ 割高ゾーン", 1),
     ("sweep", SWEEP_TAG(liquidity="internal"), "　└ 内部流動性", 1),

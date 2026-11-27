@@ -83,7 +83,7 @@ def test_engine_notifies_and_records_sweep(tmp_path):
     assert e.chart_data("5803")["pools"] is not None
 
 
-# 戻り高値 1,010 を上に抜けて（BOS）1,040 まで上げ、押し安値 1,018 を付けた後、そこを割って戻す
+# 戻り高値 1,010 を上に抜けて1,040 まで上げ、押し安値 1,018 を付けた後、そこを割って戻す
 BOS = (flat(1000, 8) + [(1001, 1010, 1000, 1008, 3000), (1008, 1009, 1003, 1004, 3000)] + flat(1003, 6)
        + [(1004, 1016, 1003, 1015, 9000), (1015, 1028, 1014, 1027, 5000), (1027, 1040, 1026, 1038, 5000),
           (1038, 1039, 1030, 1031, 3000), (1031, 1032, 1024, 1025, 3000), (1025, 1026, 1018, 1021, 3000),
@@ -121,11 +121,11 @@ def test_engine_notifies_bos_dip_and_keeps_plain_sweep_separate(tmp_path):
         return sent, store, tmp_path / f"{sub}.sqlite"
 
     sent, store, db = run("a", BOS + SWEEP)
-    assert [a[0] for a in sent] == ["BOS後の押し目  5803"]                # 1回だけ、BOS後の押し目として知らせる
+    assert [a[0] for a in sent] == ["内部流動性ブレイク  5803"]                # 1回だけ、内部流動性ブレイクとして知らせる
     assert store.recent_signals("paper")[0]["strategy_id"] == "bos_dip"
     (ev,) = squeeze_web.list_events(db, kind="sweep")["events"]          # 履歴は流動性スイープとして残る
     assert ev["metrics"]["bos_setup"] is True and ev["metrics"]["liquidity"] == "internal"
-    sent, store, _ = run("b", BOS + SWEEP, notify_on="liq_sweep")        # BOS後の押し目をオフ → 普通のスイープとして
+    sent, store, _ = run("b", BOS + SWEEP, notify_on="liq_sweep")        # 内部流動性ブレイクをオフ → 普通のスイープとして
     assert [a[0] for a in sent] == ["流動性スイープ  5803"]
     sent, store, db = run("c", BASE + [(4942, 4945, 4915, 4944, 12000)], notify_on="bos_dip")
     assert sent == [] and store.recent_signals("paper") == []            # 条件に合わないスイープは知らせない

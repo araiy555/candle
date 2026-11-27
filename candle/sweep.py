@@ -28,7 +28,7 @@ class SweepParams:
     max_depth: float = 0.01      # 割り込みがこれより深い場合は対象外（急落であって、狩りではない）
     vol_avg: int = 10
     vol_mult: float = 2.0        # 平均の何倍で「出来高が増えた」とみなすか
-    bos_lookback: int = 60       # 上へのブレイク（BOS）と、直近の上昇を探す本数
+    bos_lookback: int = 60       # 高値ブレイクと、直近の上昇を探す本数
     min_leg: float = 0.004       # 上昇とみなす最小の値幅（安値比）
 
 
@@ -100,9 +100,9 @@ def liquidity_levels(bars: Sequence[Bar], p: SweepParams | None = None, major: i
 
 
 def find_bos(bars: Sequence[Bar], upto: int, p: SweepParams) -> dict | None:
-    """upto より前で、いちばん新しい「上へのブレイク（BOS）」を探す。
+    """upto より前で、いちばん新しい「高値ブレイク」を探す。
 
-    BOS: それまで抜かれていなかった戻り高値（左右の足より高い高値）を、終値で上に抜けた足。
+    高値ブレイク: それまで抜かれていなかった戻り高値（左右の足より高い高値）を、終値で上に抜けた足。
     抜けたということは、そこで新しく買った人がいて、その損切りが下にたまる（内部流動性）。
     """
     start = max(p.pivot, upto - p.bos_lookback)
@@ -125,7 +125,7 @@ def find_bos(bars: Sequence[Bar], upto: int, p: SweepParams) -> dict | None:
 def context(bars: Sequence[Bar], s: int, i: int, level: float, low: float, p: SweepParams) -> dict:
     """スイープが起きた場面の分類（後で、どの場面のスイープが効くのかを比べるための印）。
 
-      after_bos : 上へのブレイク（BOS）の後で、割られた押し安値が、抜かれた高値より後にできたもの
+      after_bos : 高値ブレイクの後で、割られた押し安値が、抜かれた高値より後にできたもの
       zone      : 直近の上昇（安値〜高値）の中での位置。discount=割安（下半分） / premium=割高 / below=範囲の下
       liquidity : external=当日安値を割った（外部流動性） / internal=当日安値より上の押し安値（内部流動性）
     """
@@ -141,7 +141,7 @@ def context(bars: Sequence[Bar], s: int, i: int, level: float, low: float, p: Sw
         mid = (leg_low + leg_high) / 2
         zone = "below" if low < leg_low else "discount" if low < mid else "premium"
     out = dict(after_bos=after_bos, zone=zone, liquidity="external" if level <= day_low else "internal",
-               leg_low=leg_low, leg_high=leg_high, bos_setup=after_bos and zone == "discount")
+               leg_low=leg_low, leg_high=leg_high, bos_setup=after_bos and zone == "discount" and level > day_low)
     if bos:
         out.update(bos_level=bos["bos_level"], bos_time=bos["bos_time"], bos_volume_ratio=bos["bos_volume_ratio"])
     return out
@@ -155,7 +155,7 @@ def context_conditions(c: dict) -> list:
            + (f"（出来高 平均の{c['bos_volume_ratio']:.1f}倍）" if c.get("bos_volume_ratio") else "") + "。"
            if c.get("bos_level") else "直近に、戻り高値を上に抜けた足は無い。")
     return [
-        dict(key="bos", label="上へのブレイク（BOS）の後", ok=c["after_bos"],
+        dict(key="bos", label="高値ブレイクの後", ok=c["after_bos"],
              text=bos + ("割られた押し安値は、その後にできたもの。" if c["after_bos"] else "")),
         dict(key="zone", label="割安ゾーン", ok=c["zone"] == "discount",
              text=f"直近の上昇 {c['leg_low']:,.1f}〜{c['leg_high']:,.1f}円の中で、{ZONES[c['zone']]}。"),
