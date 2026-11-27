@@ -55,6 +55,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <header><h1>candle</h1><span class="pill" id="mode"></span><span class="seg" id="modes" hidden><button data-mode="watch">通知のみ</button><button data-mode="paper">テスト</button><button data-mode="live">本番</button></span><span class="pill" id="feed"></span>
 <span class="pill" id="halt"></span><span class="mut" id="time"></span>
 <a href="/squeeze" style="color:var(--acc);font-size:13px">検知履歴（サインの後の値動き）</a>
+<a href="/analysis" style="color:var(--acc);font-size:13px">取引の分析</a>
 <label class="pill" style="cursor:pointer"><input type="checkbox" id="auto" style="vertical-align:-2px"> サインが出たらkabuステーションのチャートを自動で切り替える</label>
 <span style="flex:1"></span><button id="closeall" hidden>全ポジションを決済</button><button id="btn"></button></header>
 <main>
@@ -350,6 +351,18 @@ def start_web(target, port: int = 8765, data_dir=None, db_path=None) -> Threadin
                     data = past_chart(db_path, symbol, day, cur().names.get(symbol))   # 過去の日は保存した足から
                 self._send(json.dumps(data or cur().chart_data(symbol), ensure_ascii=False).encode("utf-8"),
                            "application/json")
+            elif self.path.split("?")[0] == "/analysis":
+                from . import analysis
+                self._send(analysis.PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path.startswith("/api/analysis"):
+                from urllib.parse import parse_qs, urlparse
+
+                from . import analysis
+                q = parse_qs(urlparse(self.path).query)
+                arg = lambda k: (q.get(k, [""])[0][:10] or None)
+                mode = "live" if arg("mode") == "live" else "paper"
+                res = analysis.analyze(db_path, mode, arg("from"), arg("to"))
+                self._send(json.dumps(res, ensure_ascii=False).encode("utf-8"), "application/json")
             elif self.path.split("?")[0] == "/squeeze":
                 from . import squeeze_web
                 self._send(squeeze_web.PAGE.encode("utf-8"), "text/html; charset=utf-8")
