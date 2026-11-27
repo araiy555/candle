@@ -177,7 +177,7 @@ button{cursor:pointer}.kpis{display:flex;flex-wrap:wrap;gap:22px}.kpis>div>span{
 <header><h1>検知履歴</h1><a href="/">← 管理画面へ戻る</a><span style="flex:1"></span>
 <span class="mut" style="font-size:12px"><span class="tag">取得</span> 受信した値　<span class="tag c">計算</span> 受信値から計算した値　<span class="miss">欠損</span> 受信できなかった値</span></header>
 <main id="listView">
-<section><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label for="kind">種類</label><select id="kind"><option value="squeeze">スクイーズ（板と約定の流れ）</option><option value="wall">売り板突破（大口の売り板）</option><option value="sweep">流動性スイープ</option><option value="open">寄り付き押し目</option></select><label for="outcome" id="outl" hidden>結果</label><select id="outcome" hidden><option value="">すべて</option><option value="break">吸収して突破</option><option value="pulled">取消で消えた</option><option value="rejected">跳ね返された</option></select><label for="day">期間</label><select id="day"></select><button id="reload">更新</button><span class="mut" id="count"></span></div></section>
+<section><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label for="kind">種類</label><select id="kind"><option value="squeeze">スクイーズ（板と約定の流れ）</option><option value="wall">売り板突破（大口の売り板）</option><option value="sweep">流動性スイープ</option><option value="open">寄り付き押し目</option><option value="fvg">FVG反発・FVG割れ</option></select><label for="outcome" id="outl" hidden>結果</label><select id="outcome" hidden><option value="">すべて</option><option value="break">吸収して突破</option><option value="pulled">取消で消えた</option><option value="rejected">跳ね返された</option></select><label for="day">期間</label><select id="day"></select><button id="reload">更新</button><span class="mut" id="count"></span></div></section>
 <section><h2>集計</h2><div id="agg"></div></section>
 <section><h2>検知一覧（新しい順）</h2><div id="list"></div><div class="note" id="listnote"></div></section>
 </main>
@@ -221,6 +221,13 @@ async function loadList(){
     `<div class="note">横ばいは騰落率が±${a.flat_threshold}%以内。欠損した検知は割合と平均の計算から除いています。追跡が5分完了した ${a.complete}件の平均：最大上昇 ${a.avg_max_up==null?'-':pct(a.avg_max_up)}、最大下落 ${a.avg_max_down==null?'-':pct(a.avg_max_down)}</div>`+
     '<h3>検知した時間帯別の平均騰落率 '+C+'</h3>'+table([{t:'時間帯',l:1},'件数',...H.map(lab)],
     a.by_hour.map(r=>({cells:[{l:1,v:r.hour+'時台'},r.n,...H.map(h=>r[h].avg==null?'<span class="mut">-</span>':pct(r[h].avg)+` <span class="mut">(${r[h].n})</span>`)]})));
+  if(kind==='fvg'){const o=d.outcomes||{};$('count').textContent+=`　内訳：FVG反発 ${o.hold||0}／FVG割れ ${o.break||0}`;
+    $('list').innerHTML=table([{t:'日時',l:1},{t:'銘柄',l:1},{t:'種類',l:1},'終値','FVG','押しの安値','出来高比','POC',...H.map(lab),'最大上昇','最大下落',{t:'状態',l:1}],
+      d.events.map(e=>{const q=e.acquired,c=e.computed,m=e.metrics;return {attr:` class="row" data-id="${e.id}"`,cells:[{l:1,v:dt(q.time)},{l:1,v:`<a href="#${e.id}">${esc(q.symbol)} ${esc(q.name||'')}</a>`},
+        {l:1,v:m.outcome==='hold'?'<b class="ok">FVG反発</b>':'<span class="ng">FVG割れ</span>'},num(q.price,1),m.bottom==null?MISS:n(m.bottom,1)+'〜'+n(m.top,1),num(m.pullback_low,1),m.volume_ratio==null?MISS:n(m.volume_ratio,1)+'倍',m.poc==null?'<span class="mut">-</span>':n(m.poc,1),...H.map(h=>hcell(e.horizons[h])),
+        e.status==='tracking'?'<span class="mut">記録中</span>':pct(c.max_up),e.status==='tracking'?'<span class="mut">記録中</span>':pct(c.max_down),
+        {l:1,v:e.status==='done'?'完了':e.status==='tracking'?'<span class="mut">記録中</span>':`<span class="miss" title="${esc(e.gap_reason||'')}">途中まで（${n(q.tracked_seconds,0)}秒）</span>`}]}}));
+    $('listnote').textContent='騰落率は、サインが出た足の終値からの変化です。FVG反発は上がれば見込みどおり、FVG割れは下がれば見込みどおりです。集計は反発と割れを合わせた値です。行をクリックすると詳細を開きます。';return}
   if(kind==='open'){const o=d.outcomes||{},tot=(o.target||0)+(o.stop||0)+(o.timeout||0);$('count').textContent+=`　結果：目標に到達 ${o.target||0}／損切りに到達 ${o.stop||0}／どちらにも届かず ${o.timeout||0}`+(tot?`（到達率 ${n((o.target||0)/tot*100,0)}%）`:'');
     const res=m=>m.outcome==='target'?'<b class="ok">目標に到達</b>':m.outcome==='stop'?'<span class="ng">損切りに到達</span>':m.outcome==='timeout'?'どちらにも届かず':'<span class="mut">判定中</span>';
     $('list').innerHTML=table([{t:'日時',l:1},{t:'銘柄',l:1},{t:'結果',l:1},'結果まで','買う価格','目標','損切りの目安','厚い買い板','数量','倍率','押し',...H.map(lab),'最大上昇','最大下落',{t:'状態',l:1}],
@@ -289,7 +296,10 @@ async function loadDetail(id){
   if(e.pre_coverage<e.window.pre-5)warn.push(`検知前のデータは ${n(e.pre_coverage,0)}秒分しか残っていません（起動直後や受信開始直後のため）。`);
   $('dwarn').hidden=!warn.length;$('dwarn').innerHTML=warn.map(w=>`<div class="miss">${w}</div>`).join('');
   const wall=e.kind==='wall',m=e.metrics;
-  if(e.kind==='open'){$('dkpis').innerHTML=[['結果 '+C,esc(m.outcome_label||'判定中')+(m.result_seconds==null?'':`（${n(m.result_seconds,0)}秒後）`)],['買う価格（最良売り気配） '+G,num(m.entry,1,'円')],['目標（+'+n(m.target_ticks,0)+'ティック） '+C,num(m.target,1,'円')],['損切りの目安 '+C,num(m.stop,1,'円')],
+  if(e.kind==='fvg'){$('dkpis').innerHTML=[['種類 '+C,esc(m.outcome_label||'')],['終値 '+G,num(q.price,1,'円')],['FVG '+C,m.bottom==null?MISS:n(m.bottom,1)+'〜'+n(m.top,1)+'円'],['押しの安値 '+G,num(m.pullback_low,1,'円')],['出来高比 '+C,m.volume_ratio==null?MISS:n(m.volume_ratio,1)+'倍'],
+      ['上昇の範囲 '+C,m.leg_low==null?MISS:n(m.leg_low,1)+'〜'+n(m.leg_high,1)+'円'],['POC '+C,m.poc==null?'<span class="mut">-</span>':n(m.poc,1)+'円']]
+      .map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('')}
+  else if(e.kind==='open'){$('dkpis').innerHTML=[['結果 '+C,esc(m.outcome_label||'判定中')+(m.result_seconds==null?'':`（${n(m.result_seconds,0)}秒後）`)],['買う価格（最良売り気配） '+G,num(m.entry,1,'円')],['目標（+'+n(m.target_ticks,0)+'ティック） '+C,num(m.target,1,'円')],['損切りの目安 '+C,num(m.stop,1,'円')],
       ['厚い買い板 '+G,num(m.wall_price,1,'円')+' に '+num(m.wall_qty,0,'株')],['他の買い板の何倍か '+C,m.ratio==null?MISS:n(m.ratio,1)+'倍'],['始値 '+G,num(m.open,1,'円')],['当日高値 '+G,num(m.day_high,1,'円')],['1ティック '+C,num(m.tick,1,'円')]]
       .map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('')}
   else if(e.kind==='sweep'){$('dkpis').innerHTML=[['回復後の株価 '+G,num(q.price,1,'円')],['前日比 '+G,q.change==null?MISS:`${q.change>0?'+':''}${n(q.change,1)}円（${pct(q.change_pct)}）`],['押し安値（流動性プール） '+C,num(m.level,1,'円')],['割り込んだ安値 '+C,num(m.sweep_low,1,'円')],['割り込み幅 '+C,m.depth_pct==null?MISS:n(m.depth_pct,2)+'%'],
@@ -302,7 +312,7 @@ async function loadDetail(id){
     ['出来高比率 '+C,c.surge==null?MISS:n(c.surge,1)+'倍'],['売り板吸収スコア '+C,c.absorb_score==null?MISS:n(c.absorb_score,1)+'倍'],['買い約定の連続 '+C,c.run==null?MISS:c.run+'回'],['買い約定の比率 '+C,c.buy_ratio==null?MISS:n(c.buy_ratio*100,0)+'%'],['売り約定の比率 '+C,c.sell_share==null?MISS:n(c.sell_share*100,0)+'%']]
     .map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('');
   $('dconds').innerHTML=table([{t:'条件',l:1},{t:'成否',l:1},{t:'具体的な理由（検知時点の数値）',l:1}],e.conditions.map(x=>({cells:[{l:1,v:esc(x.label)},{l:1,v:x.ok?'<b class="ok">成立</b>':'<span class="ng">不成立</span>'},{w:1,v:esc(x.text)}]})))+
-    (wall?'<div class="note">板の数量が減った理由（約定か取消か）は、その間の出来高からの推定です。見えているのは板の上から10本だけで、表示されない注文は分かりません。</div>':'')+(wall||e.kind==='sweep'||e.kind==='open'?'':`<div class="note">3つのうち2つ以上が成立し、出来高が通常の2倍以上のときに検知します。直近${n(e.metrics.window,0)}秒の約定 ${n(e.metrics.trades)}回・${n(e.metrics.volume)}株（通常ペースでの見込み ${n(e.metrics.expected_volume)}株）。約定の向きは、配信からの推定です。</div>`);
+    (wall?'<div class="note">板の数量が減った理由（約定か取消か）は、その間の出来高からの推定です。見えているのは板の上から10本だけで、表示されない注文は分かりません。</div>':'')+(wall||e.kind==='sweep'||e.kind==='open'||e.kind==='fvg'?'':`<div class="note">3つのうち2つ以上が成立し、出来高が通常の2倍以上のときに検知します。直近${n(e.metrics.window,0)}秒の約定 ${n(e.metrics.trades)}回・${n(e.metrics.volume)}株（通常ペースでの見込み ${n(e.metrics.expected_volume)}株）。約定の向きは、配信からの推定です。</div>`);
   const mx=e.status==='tracking'?'<span class="mut">記録中</span>':`${pct(c.max_up)}（${num(q.max_price,1,'円')}）`,mn=e.status==='tracking'?'<span class="mut">記録中</span>':`${pct(c.max_down)}（${num(q.min_price,1,'円')}）`;
   $('dhor').innerHTML=table([{t:'経過',l:1},'株価 '+G,'騰落率 '+C,{t:'備考',l:1}],H.map(h=>{const v=e.horizons[h];return {cells:[{l:1,v:lab(h)},v.price!=null?n(v.price,1)+'円':v.pending?'<span class="mut">記録中</span>':MISS,v.price!=null?pct(v.ret):v.pending?'':MISS,
       {l:1,v:v.missing?`<span class="miss">${esc(v.missing)}</span>`:v.price!=null&&v.age>0?`<span class="mut">その時点で最後の約定は ${n(v.age,0)}秒前</span>`:''}]}}))+

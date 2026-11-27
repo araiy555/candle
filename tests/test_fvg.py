@@ -101,6 +101,10 @@ def test_engine_notifies_fvg_once_and_never_trades_it():
     assert row["strategy_id"] == "fvg_hold" and row["action"] == "通知のみ" and row["pattern_low"] == 1003
     assert e.open == [] and not e.pending
     assert e.chart_data("T")["structure"]["fvgs"][0]["bottom"] == 1003
+    import json
+    ((kind, metrics, price),) = store.conn.execute("SELECT kind, metrics, price FROM squeeze_events").fetchall()
+    m = json.loads(metrics)                                            # 検知履歴にも残り、その後を追う
+    assert kind == "fvg" and m["outcome"] == "hold" and m["bottom"] == 1003 and price == 1013
 
     sent.clear()
     e2 = PaperEngine(Store(":memory:"), rm, enabled={"tweezer_bottom"}, notify=lambda *a: sent.append(a),

@@ -11,6 +11,8 @@ from collections import defaultdict, deque
 from datetime import datetime, time
 
 from .bars import JST, SESSIONS, Bar
+from types import SimpleNamespace
+
 from . import fvg, opening, sweep
 from .flow import FlowDetector, FlowParams
 from .market import MarketMonitor
@@ -65,7 +67,7 @@ class PaperEngine:
         self.opening = opening.OpenTracker() if OPEN_STRATEGY in wanted else None
         self.open_active: list[dict] = []                  # 目標・損切りのどちらに先に届くかを見ている検知
         want_flow = (FLOW_STRATEGY in wanted or self.walls is not None or self.sweep_on
-                     or self.opening is not None)
+                     or self.opening is not None or bool(wanted & set(FVG_STRATEGIES.values())))
         self.flow_notify = FLOW_STRATEGY in wanted   # スクイーズそのものを通知・記録するか
         self.flow = FlowDetector(flow_params) if want_flow else None
         self.flow_trades = FLOW_STRATEGY in ids      # スクイーズで売買もするか（通知だけなら False）
@@ -305,6 +307,25 @@ class PaperEngine:
         if (sid, bar.symbol, bar.end.isoformat()) in self.seen:
             return   # 再起動などで同じ足をもう一度見た場合
         self.seen.add((sid, bar.symbol, bar.end.isoformat()))
+        if self.squeeze_log is not None:
+            # 反発も割れも検知履歴に残し、その後の値動きを追う
+            vol_ok = f"出来高は直近平均の {sig.volume_ratio:.1f}倍。"
+            conditions = [
+                dict(key="fvg", label="割安ゾーンのFVG", ok=True,
+                     text=f"{sig.formed:%H:%M} の足でできたFVG {sig.bottom:,.1f}〜{sig.top:,.1f}円。"
+                          f"上昇の範囲は {sig.leg_low:,.1f}〜{sig.leg_high:,.1f}円。"),
+                dict(key="close", label="FVGより上で確定" if sig.kind == "hold" else "FVGを終値で下抜け", ok=True,
+                     text=f"終値 {bar.close:,.1f}円。押しの安値 {sig.pullback_low:,.1f}円。"),
+                dict(key="volume", label="出来高の増加", ok=True, text=vol_ok),
+            ]
+            metrics = dict(outcome=sig.kind, outcome_label=name, bottom=sig.bottom, top=sig.top,
+                           leg_low=sig.leg_low, leg_high=sig.leg_high, pullback_low=sig.pullback_low,
+                           volume_ratio=sig.volume_ratio, poc=sig.poc, poc_source=sig.poc_source,
+                           formed=sig.formed.isoformat())
+            self.squeeze_log.on_signal(
+                SimpleNamespace(symbol=bar.symbol, time=bar.end, price=bar.close, metrics=metrics,
+                                conditions=conditions),
+                self.last_msg.get(bar.symbol, {}), self.names.get(bar.symbol), kind="fvg")
         if self.notify and self._wants(sid):
             label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
             self.notify(f"{name}  {label}", f"{bar.end:%H:%M} 終値 {bar.close:,.1f}　{sig.note}", bar.symbol)
