@@ -101,6 +101,27 @@ def liquidity_levels(bars: Sequence[Bar], p: SweepParams | None = None, major: i
     return out
 
 
+def targets(bars: Sequence[Bar], price: float, p: SweepParams | None = None) -> dict:
+    """下の流動性を割って戻した後に、向かう先。上にある流動性を、近い順に並べる。
+
+      target    : 次の目標 ＝ 上の外部流動性（反対側のオーダーブロック）のうち、いちばん近いもの
+      waypoints : 途中にある内部流動性（目標より手前にあるもの。近い順）
+    """
+    above = sorted((x for x in liquidity_levels(bars, p, max_internal=99)
+                    if x["side"] == "high" and x["level"] > price), key=lambda x: x["level"])
+    ext = next((x for x in above if x["kind"] == "external"), None)
+    way = [x["level"] for x in above if x["kind"] == "internal" and (ext is None or x["level"] < ext["level"])]
+    return dict(target=ext["level"] if ext else None,
+                target_pct=(ext["level"] / price - 1) * 100 if ext else None, waypoints=way[:3])
+
+
+def target_text(t: dict) -> str:
+    if t.get("target") is None:
+        return "次の目標：上の外部流動性は、まだ見つかっていません"
+    way = "／途中の内部流動性 " + "・".join(f"{v:,.1f}" for v in t["waypoints"]) if t.get("waypoints") else ""
+    return f"次の目標：上の外部流動性 {t['target']:,.1f}（+{t['target_pct']:.2f}%）{way}"
+
+
 def find_bos(bars: Sequence[Bar], upto: int, p: SweepParams) -> dict | None:
     """upto より前で、いちばん新しい「高値ブレイク」を探す。
 
@@ -215,6 +236,10 @@ def detect(bars: Sequence[Bar], p: SweepParams | None = None) -> SweepSignal | N
                        bars_since_pool=s - i, reclaim_bars=back + 1)
         ctx = context(bars, s, i, level, low, p)
         metrics.update(ctx)
+        metrics.update(targets(bars, cur.close, p))
+        kind = f"外部流動性（{ctx['ext_kind']}）" if ctx["liquidity"] == "external" else "内部流動性"
+        note = f"{kind} {level:,.1f} を {low:,.1f} まで割って {cur.close:,.1f} に回復。出来高 平均の{ratio:.1f}倍　→ " \
+            + target_text(metrics)
         conditions += context_conditions(ctx)
         return SweepSignal(cur.symbol, cur.end, cur.close, level, bars[i].start, low, note,
                            conditions, metrics)

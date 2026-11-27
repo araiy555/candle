@@ -28,9 +28,9 @@ class TradeSettings:
     quiet_open_min: float = 15       # 寄り付き（9:00）からこの分数は、通知も売買もしない
     min_price: float = 500           # 株価の下限（円）。これより安い銘柄は通知も売買もしない。0なら除かない
     # 通知するサイン（戦略IDをカンマ区切り）。管理画面のチェックで選ぶ
-    notify_on: str = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip,bos_dip,ext_liq"
+    notify_on: str = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip"
     # 画面に出したことのあるサイン。後から増えたサインを、保存済みの設定にも初期状態（オン）で足すために使う
-    notify_seen: str = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip,bos_dip,ext_liq"
+    notify_seen: str = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip"
     min_range_pct: float = 0.15      # 足の平均値幅率の下限（%）。これ未満は値動きが小さい（レンジ）とみなして見送る。0なら除かない
     vwap_rule: str = "above"        # above=株価がVWAPより下のときは買わない / off=VWAPを見ない
     min_drop_pct: float = 0.3        # 直前の下落率の下限（%）。横ばいの中のサインを除く。0なら除かない

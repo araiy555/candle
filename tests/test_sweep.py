@@ -32,7 +32,9 @@ def test_sweep_and_reclaim_in_one_bar_with_volume():
     sig = detect(bars_from(BASE + [(4942, 4945, 4915, 4944, 12000)]))    # 長い下ヒゲ
     assert sig is not None and (sig.level, sig.low, sig.price) == (4930, 4915, 4944)
     assert sig.metrics["volume_ratio"] > 3 and sig.metrics["reclaim_bars"] == 1
-    assert "割り込んだ後" in sig.note and len(sig.conditions) == 6
+    assert sig.note.startswith("外部流動性（当日安値） 4,930.0 を 4,915.0 まで割って 4,944.0 に回復")
+    assert "次の目標：上の外部流動性 4,977.0（+0.67%）" in sig.note and len(sig.conditions) == 6
+    assert sig.metrics["target"] == 4977 and sig.metrics["waypoints"] == []
     m = sig.metrics                                                     # 当日安値を割った＝外部流動性。割安ゾーンではない
     assert (m["liquidity"], m["zone"], m["bos_setup"]) == ("external", "below", False)
 
@@ -71,7 +73,7 @@ def test_engine_notifies_and_records_sweep(tmp_path):
                         "Sell1": {"Price": 4945, "Qty": 300}, "Buy1": {"Price": 4944, "Qty": 400}}, bars[-2].end)
     for b in bars:
         e.on_bar(b)
-    assert [a[0] for a in sent] == ["流動性スイープ  5803 フジクラ"] and "4,930.0" in sent[0][1]
+    assert [a[0] for a in sent] == ["流動性ブレイク  5803 フジクラ"] and "4,930.0" in sent[0][1]
     (row,) = store.recent_signals("paper")
     assert row["strategy_id"] == "liq_sweep" and row["pattern_low"] == 4915 and row["action"] == "通知のみ"
     assert e.open == [] and not e.pending                               # 売買はしない
@@ -104,38 +106,58 @@ def test_sweep_after_bos_in_discount_zone_is_tagged():
     assert detect(high) is None                                          # 割っていなければ出ない
 
 
-def test_engine_notifies_bos_dip_and_keeps_plain_sweep_separate(tmp_path):
+def test_one_notification_for_external_and_internal_with_next_target(tmp_path):
     from candle import squeeze_web
     from candle.engine import PaperEngine
     from candle.risk import RiskLimits, RiskManager
+    from candle.settings import TradeSettings
     from candle.store import Store
 
-    def run(sub, rows, **settings):
+    def run(sub, rows, prev=None):
         store, sent = Store(tmp_path / f"{sub}.sqlite"), []
         e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"}, trade_enabled=False,
-                        notify=lambda *a: sent.append(a), notify_ids={"liq_sweep", "bos_dip"})
-        if settings:
-            e.update_settings(settings)
+                        notify=lambda *a: sent.append(a), notify_ids={"liq_sweep"})
+        if prev:
+            e.prev_days["5803"] = dict(day="2026-11-23", close=1020, **prev)
         for b in bars_from(rows, symbol="5803"):
             e.on_bar(b)
-        return sent, store, tmp_path / f"{sub}.sqlite"
+        (ev,) = squeeze_web.list_events(tmp_path / f"{sub}.sqlite", kind="sweep")["events"]
+        return sent, store, ev["metrics"]
 
-    sent, store, db = run("a", BOS + SWEEP)
-    assert [a[0] for a in sent] == ["内部流動性ブレイク  5803"]                # 1回だけ、内部流動性ブレイクとして知らせる
-    assert store.recent_signals("paper")[0]["strategy_id"] == "bos_dip"
-    (ev,) = squeeze_web.list_events(db, kind="sweep")["events"]          # 履歴は流動性スイープとして残る
-    assert ev["metrics"]["bos_setup"] is True and ev["metrics"]["liquidity"] == "internal"
-    sent, store, _ = run("b", BOS + SWEEP, notify_on="liq_sweep")        # 内部流動性ブレイクをオフ → 普通のスイープとして
-    assert [a[0] for a in sent] == ["流動性スイープ  5803"]
-    sent, store, db = run("c", BASE + [(4942, 4945, 4915, 4944, 12000)], notify_on="bos_dip")
-    assert sent == [] and store.recent_signals("paper") == []            # 条件に合わないスイープは知らせない
-    assert len(squeeze_web.list_events(db, kind="sweep")["events"]) == 1  # が、記録は残す
+    # 内部流動性を割って戻した → 次の目標は上の外部流動性（当日高値 1,040）
+    sent, store, m = run("a", BOS + SWEEP)
+    assert [a[0] for a in sent] == ["流動性ブレイク  5803"]
+    assert sent[0][1].split(" ", 1)[1].startswith("内部流動性 1,018.0 を 1,015.0 まで割って 1,020.0 に回復")
+    assert "次の目標：上の外部流動性 1,040.0（+1.96%）" in sent[0][1]
+    assert store.recent_signals("paper")[0]["strategy_id"] == "liq_sweep"
+    assert (m["liquidity"], m["bos_setup"], m["target"]) == ("internal", True, 1040)     # 場面の印は記録に残る
+    # 外部流動性（当日安値）を割って戻した → 同じ通知名で知らせる
+    sent, _, m = run("b", BASE + [(4942, 4945, 4915, 4944, 12000)])
+    assert [a[0] for a in sent] == ["流動性ブレイク  5803"] and "外部流動性（当日安値） 4,930.0" in sent[0][1]
+    assert m["liquidity"] == "external" and m["target"] == 4977
+    # 前日安値も割って戻した／前日高値のほうが近ければ、それを次の目標にする
+    sent, _, m = run("c", BOS + SWEEP, prev=dict(high=1030, low=1017))
+    assert "前日安値 1,017.0 も割って回復" in sent[0][1] and "次の目標：上の外部流動性 1,030.0（+0.98%）（前日高値）" in sent[0][1]
+    assert (m["liquidity"], m["ext_kind"], m["target"], m["prev_low"]) == ("external", "前日安値", 1030, 1017)
+    # 以前に分けていたサインのIDが設定に残っていても問題ない
+    old = TradeSettings.from_dict({"notify_on": "tweezer_bottom,liq_sweep,bos_dip,ext_liq"})
+    assert old.notifies("liq_sweep")
+
+
+def test_targets_list_internal_liquidity_on_the_way():
+    from candle.sweep import target_text, targets
+    rows = BOS[:-2] + [(1024, 1031, 1023, 1030, 3000), (1030, 1031, 1026, 1027, 3000), (1027, 1028, 1023, 1024, 3000),
+                       (1024, 1026, 1022, 1023, 3000), (1023, 1025, 1021, 1022, 3000), (1022, 1024, 1020, 1021, 3000)]
+    t = targets(bars_from(rows), 1021)
+    assert t["target"] == 1040 and t["waypoints"] == [1031]                    # 途中に内部流動性（小さな波の高値）
+    assert target_text(t) == "次の目標：上の外部流動性 1,040.0（+1.86%）／途中の内部流動性 1,031.0"
+    assert "まだ見つかっていません" in target_text(dict(target=None))
 
 
 def test_new_signal_is_added_to_saved_settings():
     from candle.settings import TradeSettings
-    old = TradeSettings.from_dict({"notify_on": "tweezer_bottom,liq_sweep"})     # 旧版で保存した設定
-    assert old.notify_on == "tweezer_bottom,liq_sweep,bos_dip,ext_liq"                   # 後から増えたサインはオンで加わる
+    old = TradeSettings.from_dict({"notify_on": "tweezer_bottom", "notify_seen": "tweezer_bottom"})
+    assert old.notify_on.startswith("tweezer_bottom,") and "liq_sweep" in old.notify_on   # 後から増えたサインはオンで加わる
     again = TradeSettings.from_dict({"notify_on": "tweezer_bottom", "notify_seen": old.notify_seen})
     assert again.notify_on == "tweezer_bottom"                                   # 画面で外したものは戻さない
 
@@ -155,30 +177,3 @@ def test_liquidity_levels_external_and_internal():
     assert lv[("low", 1018)] == "internal" and lv[("high", 1033)] == "internal"   # 内側の小さな波
     assert all(k in ("external", "internal") for k in lv.values())
     assert liquidity_levels(bars[:3]) == []
-
-
-def test_engine_notifies_external_liquidity_break(tmp_path):
-    from candle import squeeze_web
-    from candle.engine import PaperEngine
-    from candle.risk import RiskLimits, RiskManager
-    from candle.store import Store
-
-    def run(sub, rows, prev_low=None):
-        store, sent = Store(tmp_path / f"{sub}.sqlite"), []
-        e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"}, trade_enabled=False,
-                        notify=lambda *a: sent.append(a), notify_ids={"liq_sweep", "bos_dip", "ext_liq"})
-        if prev_low:
-            e.prev_days["5803"] = dict(day="2026-11-23", high=9999, low=prev_low, close=prev_low + 50)
-        for b in bars_from(rows, symbol="5803"):
-            e.on_bar(b)
-        (ev,) = squeeze_web.list_events(tmp_path / f"{sub}.sqlite", kind="sweep")["events"]
-        return sent, store, ev["metrics"]
-
-    sent, store, m = run("a", BASE + [(4942, 4945, 4915, 4944, 12000)])        # 当日安値 4,930 を割って戻す
-    assert [a[0] for a in sent] == ["外部流動性ブレイク  5803"] and "外部流動性（当日安値）" in sent[0][1]
-    assert store.recent_signals("paper")[0]["strategy_id"] == "ext_liq" and m["ext_kind"] == "当日安値"
-    sent, _, m = run("b", BOS + SWEEP)                                          # 内部流動性はこちらでは鳴らさない
-    assert [a[0] for a in sent] == ["内部流動性ブレイク  5803"] and m["liquidity"] == "internal"
-    sent, _, m = run("c", BOS + SWEEP, prev_low=1017)                           # 前日安値も割って戻した
-    assert [a[0] for a in sent] == ["外部流動性ブレイク  5803"] and "前日安値 1,017.0" in sent[0][1]
-    assert (m["liquidity"], m["ext_kind"], m["bos_setup"], m["prev_low"]) == ("external", "前日安値", False, 1017)

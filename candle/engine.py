@@ -308,8 +308,8 @@ class PaperEngine:
     def _check_sweep(self, bar: Bar, history) -> None:
         """足の確定ごとに、流動性スイープ（押し安値を割って反転）を判定して通知・記録する。
 
-        高値ブレイクの後に、割安ゾーンで内部流動性を割って戻したものは「内部流動性ブレイク」として知らせる。
-        どちらも検知履歴には流動性スイープとして残り、場面の印（高値ブレイク後・ゾーン・内部/外部）で比べられる。
+        外部流動性でも内部流動性でも、同じ「流動性ブレイク」として知らせ、どの流動性を割ったかと、
+        次の目標（上の外部流動性）・途中の内部流動性を文面に入れる。場面の印は記録に残し、分析で比べる。
         """
         if not self.sweep_on:
             return
@@ -320,13 +320,15 @@ class PaperEngine:
         if prev and prev.get("low") and sig.low < prev["low"] <= bar.close:
             # 前日安値も割って戻した（上位足の外部流動性）
             m.update(liquidity="external", ext_kind="前日安値", bos_setup=False, prev_low=prev["low"])
-            sig.note += f"（前日安値 {prev['low']:,.1f} も割って回復）"
-        if m.get("liquidity") == "external":
-            sig.note = f"外部流動性（{m.get('ext_kind')}）：" + sig.note
-        elif m.get("liquidity") == "internal":
-            sig.note = "内部流動性：" + sig.note
-        sid = (BOS_STRATEGY if m.get("bos_setup") and self._wants(BOS_STRATEGY) else
-               EXT_STRATEGY if m.get("liquidity") == "external" and self._wants(EXT_STRATEGY) else SWEEP_STRATEGY)
+            sig.note = f"前日安値 {prev['low']:,.1f} も割って回復。" + sig.note
+        if prev and prev.get("high") and prev["high"] > bar.close and (m.get("target") is None
+                                                                      or prev["high"] < m["target"]):
+            # 前日高値のほうが近ければ、そちらを次の目標にする（上位足の外部流動性）
+            old_target = sweep.target_text(m)
+            m.update(target=prev["high"], target_pct=(prev["high"] / bar.close - 1) * 100,
+                     waypoints=[v for v in m.get("waypoints", []) if v < prev["high"]], target_kind="前日高値")
+            sig.note = sig.note.replace(old_target, sweep.target_text(m) + "（前日高値）")
+        sid = SWEEP_STRATEGY
         key = (bar.symbol, sig.level_time.isoformat())
         if key in self.sweep_seen or any((x, bar.symbol, bar.end.isoformat()) in self.seen
                                          for x in (SWEEP_STRATEGY, BOS_STRATEGY, EXT_STRATEGY)):
