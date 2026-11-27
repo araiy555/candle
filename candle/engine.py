@@ -541,6 +541,7 @@ class PaperEngine:
                     quote=self.quotes.get(symbol),
                     range_pct=self.range_pct(symbol), day_range_pct=self.day_range_pct(symbol),
                     structure=fvg.structure(contiguous_tail(bars[-200:]), self.fvg_params) if bars else None,
+                    liquidity=sweep.liquidity_levels(contiguous_tail(bars[-200:]), self.sweep_params) if bars else [],
                     pools=[dict(t=tail[i].start.isoformat(), level=lv)
                            for tail in [contiguous_tail(bars[-200:])]
                            for i, lv in sweep.pools(tail, self.sweep_params)] if bars else [],

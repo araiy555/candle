@@ -138,3 +138,20 @@ def test_new_signal_is_added_to_saved_settings():
     assert old.notify_on == "tweezer_bottom,liq_sweep,bos_dip"                   # 後から増えたサインはオンで加わる
     again = TradeSettings.from_dict({"notify_on": "tweezer_bottom", "notify_seen": old.notify_seen})
     assert again.notify_on == "tweezer_bottom"                                   # 画面で外したものは戻さない
+
+
+def test_liquidity_levels_external_and_internal():
+    from candle.sweep import liquidity_levels
+    bars = bars_from(BOS + SWEEP)
+    lv = {(x["side"], x["level"]): x["kind"] for x in liquidity_levels(bars)}
+    assert lv[("high", 1040)] == "external"                 # 当日高値（上の外部流動性）
+    assert lv[("low", 999)] == "external"                   # 当日安値（下の外部流動性）
+    assert ("low", 1018) not in lv                          # 割られた安値は、もう流動性ではない
+    assert ("high", 1010) not in lv                         # 上に抜かれた高値も同じ
+    more = bars_from(BOS + [(1022, 1030, 1021, 1029, 3000), (1029, 1033, 1028, 1031, 3000),
+                            (1031, 1032, 1027, 1028, 3000), (1028, 1029, 1026, 1027, 3000),
+                            (1027, 1028, 1025, 1026, 3000), (1026, 1027, 1024, 1025, 3000)])
+    lv = {(x["side"], x["level"]): x["kind"] for x in liquidity_levels(more)}
+    assert lv[("low", 1018)] == "internal" and lv[("high", 1033)] == "internal"   # 内側の小さな波
+    assert all(k in ("external", "internal") for k in lv.values())
+    assert liquidity_levels(bars[:3]) == []

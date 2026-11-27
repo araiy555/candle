@@ -60,6 +60,45 @@ def pools(bars: Sequence[Bar], p: SweepParams | None = None, upto: int | None = 
     return out
 
 
+def liquidity_levels(bars: Sequence[Bar], p: SweepParams | None = None, major: int = 10,
+                     max_internal: int = 3) -> list[dict]:
+    """チャートに表示する流動性（損切りがたまりやすい価格）。まだ抜かれていない高値と安値。
+
+      上の流動性 : まだ上に抜かれていない高値（この上に、売った人の損切りがたまりやすい）
+      下の流動性 : まだ下に割られていない安値（この下に、買った人の損切りがたまりやすい）
+      外部流動性 : 当日の高値・安値、または左右 major 本の中で一番高い（安い）大きな波の高値・安値
+      内部流動性 : その内側にできた小さな波の高値・安値（左右 pivot 本）
+
+    内部流動性は数が多くなるので、今の株価に近いものから上下 max_internal 本ずつに絞る。
+    """
+    p = p or SweepParams()
+    n = len(bars)
+    if n < p.pivot * 2 + 1:
+        return []
+    last = bars[-1].close
+    day_high, day_low = max(b.high for b in bars), min(b.low for b in bars)
+    out = []
+    for side, val, better in (("high", lambda b: b.high, lambda a, b: a > b),
+                              ("low", lambda b: b.low, lambda a, b: a < b)):
+        found = []
+        for i in range(p.pivot, n - p.pivot):
+            lv = val(bars[i])
+            if any(better(val(bars[j]), lv) for j in range(i - p.pivot, i + p.pivot + 1) if j != i):
+                continue
+            if any(better(val(bars[j]), lv) for j in range(i + 1, n)):
+                continue                              # すでに抜かれた（流動性は消化済み）
+            if found and found[-1]["level"] == lv:
+                continue                              # 同じ価格が続くときは最初の1本
+            big = not any(better(val(bars[j]), lv) for j in range(max(0, i - major), min(n, i + major + 1)) if j != i)
+            edge = lv == (day_high if side == "high" else day_low)
+            found.append(dict(side=side, t=bars[i].start.isoformat(), level=lv,
+                              kind="external" if (big and min(i, n - 1 - i) >= major) or edge else "internal"))
+        ext = [f for f in found if f["kind"] == "external"]
+        inner = sorted((f for f in found if f["kind"] == "internal"), key=lambda f: abs(f["level"] - last))
+        out += ext + inner[:max_internal]
+    return out
+
+
 def find_bos(bars: Sequence[Bar], upto: int, p: SweepParams) -> dict | None:
     """upto より前で、いちばん新しい「上へのブレイク（BOS）」を探す。
 

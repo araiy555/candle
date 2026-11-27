@@ -95,7 +95,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <span style="flex:1"></span><button id="close">閉じる</button></div>
 <div class="kpis" id="qinfo" style="padding:10px 16px 0;gap:18px"></div>
 <div style="padding:6px 16px 0;font-size:12px" class="mut"><span style="display:inline-block;width:22px;border-top:2px solid var(--acc);vertical-align:middle;margin-right:5px"></span>VWAP（受信した値。受信前の時間帯は線がありません）</div>
-<div style="padding:4px 16px 0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px" class="mut"><span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--up);vertical-align:middle;margin-right:5px"></span>直近の上昇の範囲（中央の線より上が割高ゾーン、下が割安ゾーン）</span><span><span style="display:inline-block;width:18px;height:8px;background:var(--warn);opacity:.75;vertical-align:middle;margin-right:5px"></span>上昇中の出来高の分布</span><span><span style="display:inline-block;width:18px;border-top:2px dashed var(--fg);vertical-align:middle;margin-right:5px"></span>上昇中のPOC</span><span><span style="display:inline-block;width:18px;height:8px;border:1.5px solid var(--warn);vertical-align:middle;margin-right:5px"></span>FVG</span><span><span style="display:inline-block;width:18px;border-top:2px solid #d4a700;vertical-align:middle;margin-right:5px"></span>上昇前のレンジのPOC</span><span><span style="display:inline-block;width:18px;height:8px;border:1px dashed var(--warn);background:var(--warn);opacity:.4;vertical-align:middle;margin-right:5px"></span>流動性プール（割られていない押し安値。下に損切りがたまりやすい）</span></div>
+<div style="padding:4px 16px 0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px" class="mut"><span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--up);vertical-align:middle;margin-right:5px"></span>直近の上昇の範囲（中央の線より上が割高ゾーン、下が割安ゾーン）</span><span><span style="display:inline-block;width:18px;height:8px;background:var(--warn);opacity:.75;vertical-align:middle;margin-right:5px"></span>上昇中の出来高の分布</span><span><span style="display:inline-block;width:18px;border-top:2px dashed var(--fg);vertical-align:middle;margin-right:5px"></span>上昇中のPOC</span><span><span style="display:inline-block;width:18px;height:8px;border:1.5px solid var(--warn);vertical-align:middle;margin-right:5px"></span>FVG</span><span><span style="display:inline-block;width:18px;border-top:2px solid #d4a700;vertical-align:middle;margin-right:5px"></span>上昇前のレンジのPOC</span><span><span style="display:inline-block;width:18px;height:0;border-top:3px solid var(--up);vertical-align:middle;margin-right:5px"></span>外部流動性（当日の高値・安値、大きな波の高値・安値）</span><span><span style="display:inline-block;width:18px;height:0;border-top:1px dashed var(--warn);vertical-align:middle;margin-right:5px"></span>内部流動性（その内側の小さな波。まだ抜かれていないもの）</span></div>
 <div class="chart"><svg id="svg" role="img"></svg><div class="tip" id="tip"></div></div>
 <div id="tinfo" style="padding:8px 16px 0;font-size:13px"></div><div class="note" id="note"></div></dialog>
 <script>
@@ -215,10 +215,11 @@ function draw(data){
       if(st.leg_poc!=null){svg.appendChild(el('line',{x1:xl,x2:xr,y1:y(st.leg_poc),y2:y(st.leg_poc),stroke:'var(--fg)','stroke-width':1.5,'stroke-dasharray':'7 5'}))}
       if(st.range_poc!=null&&st.range_poc>lo&&st.range_poc<hi){svg.appendChild(el('line',{x1:L,x2:right,y1:y(st.range_poc),y2:y(st.range_poc),stroke:'#d4a700','stroke-width':1.5}));
         svg.appendChild(el('text',{x:L+4,y:y(st.range_poc)+14,fill:'var(--fg)','font-size':11,stroke:'var(--card)','stroke-width':4,'paint-order':'stroke'},'上昇前のレンジのPOC '+fmt(st.range_poc)))}}}
-  // 流動性プール（まだ割られていない押し安値。この下に損切りがたまりやすい）
-  for(const pl of (data.pools||[]).slice(-4)){const pi=bars.findIndex(b=>b.t===pl.t);if(pi<0||pl.level<=lo||pl.level>=hi)continue;const py=y(pl.level);
-    svg.appendChild(el('rect',{x:x(pi)-bw/2,y:py,width:(W-R)-(x(pi)-bw/2),height:Math.max(4,y(pl.level*(1-0.0015))-py),fill:'var(--warn)','fill-opacity':.14,stroke:'var(--warn)','stroke-width':1,'stroke-dasharray':'3 3'}));
-    svg.appendChild(el('text',{x:(W-R)-4,y:py+12,'text-anchor':'end',fill:'var(--warn)','font-size':11,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},'流動性プール '+fmt(pl.level)))}
+  // 流動性（まだ抜かれていない高値・安値。その先に損切りがたまりやすい）。外部＝大きな波・当日高安、内部＝その内側の小さな波
+  for(const q of (data.liquidity||[])){const pi=bars.findIndex(b=>b.t===q.t);if(pi<0)continue;const ext=q.kind==='external',up=q.side==='high',py=y(q.level),th=ext?9:5,col=ext?'var(--up)':'var(--warn)',x0=x(pi)-bw/2;
+    svg.appendChild(el('rect',{x:x0,y:up?py-th:py,width:(W-R)-x0,height:th,fill:col,'fill-opacity':ext?.22:.12}));
+    svg.appendChild(el('line',{x1:x0,x2:W-R,y1:py,y2:py,stroke:col,'stroke-width':ext?2.5:1,'stroke-dasharray':ext?'none':'4 3'}));
+    svg.appendChild(el('text',{x:(W-R)-4,y:up?py-th-3:py+th+11,'text-anchor':'end',fill:col,'font-size':ext?12:11,'font-weight':ext?700:400,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},(ext?'外部流動性':'内部流動性')+(up?'（上）':'（下）')+' '+fmt(q.level)))}
   const w=Math.max(1,Math.min(14,bw*0.7));
   // 出来高（株価とは別の枠。縦軸は共有しない）
   const vTop=H-26-VH,vBot=H-26,vmax=Math.max(...bars.map(b=>b.v),1),vy=v=>vBot-(v/vmax)*VH;
@@ -315,7 +316,7 @@ def past_chart(db_path, symbol: str, day: str, name: str | None = None) -> dict 
     if not rows:
         return None
     return dict(symbol=symbol, name=name, minutes=rows[0][0], quote=None, range_pct=None, day_range_pct=None,
-                structure=None, pools=[], day=day,
+                structure=None, pools=[], liquidity=[], day=day,
                 bars=[dict(t=r[1], o=r[2], h=r[3], l=r[4], c=r[5], v=r[6], ok=bool(r[7]), vwap=r[8]) for r in rows])
 
 
