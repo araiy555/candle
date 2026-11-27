@@ -66,6 +66,7 @@ class PaperEngine:
         # 寄り付き後の押し目買い（厚い買い板を背に、数ティック上を狙う）。通知と記録のみ
         self.opening = opening.OpenTracker() if OPEN_STRATEGY in wanted else None
         self.prev_days: dict[str, dict] = {}
+        self._frames: dict[str, tuple] = {}
         self.open_active: list[dict] = []                  # 目標・損切りのどちらに先に届くかを見ている検知
         want_flow = (FLOW_STRATEGY in wanted or self.walls is not None or self.sweep_on
                      or self.opening is not None or bool(wanted & set(FVG_STRATEGIES.values())))
@@ -151,7 +152,7 @@ class PaperEngine:
             log.info("サイン %s %s %s 安値%s", s.name, bar.symbol, bar.end.strftime("%H:%M"), low)
             if self.notify and self._wants(s.id):
                 label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
-                self.notify(f"{s.name}  {label}",
+                self._notify(f"{s.name}  {label}",
                             f"{bar.end:%H:%M} 終値 {bar.close:,.1f} / パターン安値 {low:,.1f}",
                             bar.symbol)
             if self.auto_chart and self.on_auto_chart:
@@ -184,6 +185,29 @@ class PaperEngine:
         if len(bars) < 5:
             return None
         return sum((b.high - b.low) / b.close for b in bars) / len(bars) * 100
+
+    def frames(self, symbol: str) -> list[dict]:
+        """足ごとの向き（1分足・5分足・15分足）。足が確定するまで同じ結果を使い回す。"""
+        h = self.history.get(symbol)
+        if not h:
+            return []
+        key = (h[-1].start, len(h))
+        hit = self._frames.get(symbol)
+        if hit is None or hit[0] != key:
+            bars = contiguous_tail(list(h))
+            hit = (key, mtf.summary(bars, bars[0].minutes))
+            self._frames[symbol] = hit
+        return hit[1]
+
+    def direction_text(self, symbol: str) -> str:
+        """通知に添える方向性。例: '方向：5分足 上昇／15分足 レンジ'。上位足が無ければ空。"""
+        fr = [f for f in self.frames(symbol)[1:] if f["trend"]]      # 判定できない足は書かない
+        return "方向：" + "／".join(f"{f['minutes']}分足 {f['label']}" for f in fr) if fr else ""
+
+    def _notify(self, title: str, body: str, symbol: str) -> None:
+        """通知を送る。上位足の方向性を添える。"""
+        d = self.direction_text(symbol)
+        self.notify(title, f"{body}　{d}" if d else body, symbol)
 
     def htf(self, symbol: str) -> str:
         """上位足（5分足・15分足）の向き。取引の記録用。"""
@@ -233,7 +257,7 @@ class PaperEngine:
             log.info("サイン %s %s %s", name, symbol, ev.note)
             if self.notify:
                 label = f"{symbol} {self.names.get(symbol) or ''}".strip()
-                self.notify(f"{name}  {label}", f"{ev.time:%H:%M:%S} {ev.price:,.1f}円　{ev.note}", symbol)
+                self._notify(f"{name}  {label}", f"{ev.time:%H:%M:%S} {ev.price:,.1f}円　{ev.note}", symbol)
             if self.auto_chart and self.on_auto_chart:
                 self.on_auto_chart(symbol)
             self._signal(self.mode, sid, symbol, ev.time, ev.price, ev.wall.price, "通知のみ",
@@ -275,7 +299,7 @@ class PaperEngine:
             self.open_active.append(dict(id=event_id, symbol=symbol, time=now, metrics=sig.metrics))
         if self.notify:
             label = f"{symbol} {self.names.get(symbol) or ''}".strip()
-            self.notify(f"{name}  {label}", f"{now:%H:%M:%S} {sig.note}", symbol)
+            self._notify(f"{name}  {label}", f"{now:%H:%M:%S} {sig.note}", symbol)
         if self.auto_chart and self.on_auto_chart:
             self.on_auto_chart(symbol)
         self._signal(self.mode, OPEN_STRATEGY, symbol, now, sig.price, sig.low, "通知のみ",
@@ -308,7 +332,7 @@ class PaperEngine:
             return                    # 記録だけ残す（通知をオフにしていても、後で比べられるように）
         if self.notify:
             label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
-            self.notify(f"{name}  {label}", f"{bar.end:%H:%M} {sig.note}", bar.symbol)
+            self._notify(f"{name}  {label}", f"{bar.end:%H:%M} {sig.note}", bar.symbol)
         if self.auto_chart and self.on_auto_chart:
             self.on_auto_chart(bar.symbol)
         self._signal(self.mode, sid, bar.symbol, bar.end, bar.close, sig.low,
@@ -352,7 +376,7 @@ class PaperEngine:
                 self.last_msg.get(bar.symbol, {}), self.names.get(bar.symbol), kind="fvg")
         if self.notify and self._wants(sid):
             label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
-            self.notify(f"{name}  {label}", f"{bar.end:%H:%M} 終値 {bar.close:,.1f}　{sig.note}", bar.symbol)
+            self._notify(f"{name}  {label}", f"{bar.end:%H:%M} 終値 {bar.close:,.1f}　{sig.note}", bar.symbol)
         if self.auto_chart and self.on_auto_chart:
             self.on_auto_chart(bar.symbol)
         self._signal(self.mode, sid, bar.symbol, bar.end, bar.close, sig.bottom, "通知のみ",
@@ -413,7 +437,7 @@ class PaperEngine:
             self.squeeze_log.on_signal(sig, msg, self.names.get(symbol))
         if self.notify and self._wants(FLOW_STRATEGY):
             label = f"{symbol} {self.names.get(symbol) or ''}".strip()
-            self.notify(f"{name}  {label}", f"{sig.time:%H:%M:%S} {sig.price:,.1f}円　{sig.note}", symbol)
+            self._notify(f"{name}  {label}", f"{sig.time:%H:%M:%S} {sig.price:,.1f}円　{sig.note}", symbol)
         if self.auto_chart and self.on_auto_chart:
             self.on_auto_chart(symbol)
         if self.trade_enabled and self.flow_trades:
@@ -609,6 +633,7 @@ class PaperEngine:
                             excluded=(self.prices.get(s) or 0) < self.settings.min_price
                             and self.prices.get(s) is not None,
                             ranging=self.is_ranging(s),
+                            frames=[dict(minutes=f["minutes"], trend=f["trend"]) for f in self.frames(s)[1:]],
                             vwap=self.vwap(s),
                             range_pct=self.range_pct(s), day_range_pct=self.day_range_pct(s),
                             change_pct=(self.quotes.get(s) or {}).get("ChangePreviousClosePer"))

@@ -88,7 +88,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <section data-trade><h2>戦略別成績</h2><div id="stats"></div></section>
 <section><h2>検出されたサイン</h2><div id="signals"></div></section>
 <section data-trade><h2>取引履歴</h2><div id="history"></div></section>
-<section><h2>監視銘柄</h2><div class="watch" id="watch"></div></section>
+<section><h2>監視銘柄</h2><div class="note" style="padding:0 0 8px">5分・15分の矢印は上位足の向きです（↑上昇　↓下降　→レンジ　?まだ判定できない）。</div><div class="watch" id="watch"></div></section>
 </main>
 <dialog id="dlg"><div class="dh"><b id="dt"></b><button id="kabu">kabuステーションで表示</button><span class="mut" id="kmsg" style="font-size:12px"></span><button id="copy">銘柄コードをコピー</button>
 <a id="l1" target="_blank" rel="noopener">Yahoo!ファイナンス</a><a id="l2" target="_blank" rel="noopener">TradingView</a><a id="l3" target="_blank" rel="noopener">株探</a>
@@ -171,7 +171,7 @@ async function load(){
   table('history',['戦略','銘柄','株数','買い','買値','決済','売値','理由','損益(円)','R','平均値幅率','損切り幅÷値幅'],
     d.history.map(t=>[esc(t.strategy),`<button class="link" data-tid="${t.id}" title="チャートで売買の位置を見る">${esc(t.symbol)} ${esc(t.name||'')}</button>`,n(t.qty),md(t.entry_time),n(t.entry_price,1),md(t.exit_time),n(t.exit_price,1),
       esc(t.reason),yen(t.pnl),rr(t.r),rng(t.range_pct),t.range_pct?n(t.stop_pct/t.range_pct,1)+'倍':'<span class="mut">-</span>']),'決済済みの取引はありません');
-  $('watch').innerHTML=d.watchlist.map(w=>`<button class="w" data-sym="${esc(w.symbol)}"${w.excluded||w.ranging?` style="opacity:.45" title="${w.excluded?'株価が下限より安いため対象外':'値動きが小さい（レンジ）ため見送り中'}"`:''}><span>${w.excluded?'<span class="mut">対象外 </span>':w.ranging?'<span class="mut">レンジ </span>':''}${esc(w.symbol)} <span class="mut">${esc(w.name||'')}</span></span><span style="text-align:right">${n(w.price,1)}<br><span style="font-size:11px" class="mut">VWAP比 ${vdiff(w.price,w.vwap)}　値幅 ${rng(w.range_pct)}</span></span></button>`).join('')||'<div class="empty">未登録</div>';
+  $('watch').innerHTML=d.watchlist.map(w=>`<button class="w" data-sym="${esc(w.symbol)}"${w.excluded||w.ranging?` style="opacity:.45" title="${w.excluded?'株価が下限より安いため対象外':'値動きが小さい（レンジ）ため見送り中'}"`:''}><span>${w.excluded?'<span class="mut">対象外 </span>':w.ranging?'<span class="mut">レンジ </span>':''}${esc(w.symbol)} <span class="mut">${esc(w.name||'')}</span></span><span style="text-align:right">${n(w.price,1)}<br><span style="font-size:11px" class="mut">${(w.frames||[]).map(f=>`${f.minutes}分<b class="${f.trend==='up'?'pos':f.trend==='down'?'neg':'mut'}">${f.trend==='up'?'↑':f.trend==='down'?'↓':f.trend==='range'?'→':'?'}</b>`).join(' ')}　VWAP比 ${vdiff(w.price,w.vwap)}　値幅 ${rng(w.range_pct)}</span></span></button>`).join('')||'<div class="empty">未登録</div>';
 }
 $('btn').onclick=async()=>{
   if(!halted&&!confirm('新規の買いを停止します。保有中のポジションの損切り・決済は継続します。'))return;

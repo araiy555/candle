@@ -52,3 +52,22 @@ def test_summary_and_engine_chart_frames():
     assert five["minutes"] == 5 and five["base_minutes"] == 1 and len(five["bars"]) == 12
     assert [f["minutes"] for f in five["frames"]] == [1, 5, 15] and five["liquidity"] is not None
     assert e.htf("T") == mtf.code(bars, 1)
+
+
+def test_direction_is_added_to_notifications_and_watchlist():
+    from candle.engine import PaperEngine
+    from candle.risk import RiskLimits, RiskManager
+    from candle.store import Store
+    sent = []
+    e = PaperEngine(Store(":memory:"), RiskManager(RiskLimits()), enabled={"tweezer_bottom"},
+                    trade_enabled=False, notify=lambda *a: sent.append(a))
+    bars = wave([1000, 1030, 1012, 1048, 1027, 1066, 1045, 1080], per=8)
+    for b in bars:
+        e.on_bar(b)
+    assert e.direction_text("T").startswith("方向：5分足 上昇")
+    e._notify("テスト  T", "本文", "T")
+    assert sent[-1][1].startswith("本文　方向：5分足 上昇") and sent[-1][2] == "T"
+    assert e.direction_text("X") == ""                                     # 足が無い銘柄には付けない
+    e.watchlist = ["T"]
+    e.on_clock(bars[-1].end)
+    assert e.snapshot["watchlist"][0]["frames"][0] == {"minutes": 5, "trend": "up"}
