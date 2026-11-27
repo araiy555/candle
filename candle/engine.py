@@ -245,6 +245,30 @@ class PaperEngine:
         d = self.direction_text(symbol)
         self.notify(title, f"{body}　{d}" if d else body, symbol)
 
+    def chart_liquidity(self, symbol: str, bars: list[Bar], minutes: int, day: list[Bar]) -> list[dict]:
+        """チャートに出す流動性。外部流動性は、出どころ（当日の大きな波・前日の高値安値・数日間の高値安値）に
+        かかわらず1種類にまとめる。同じ価格のものは1本にし、当日すでに抜かれたものは出さない。
+        """
+        out = sweep.liquidity_levels(bars, self.swing_params(minutes))
+        if minutes >= 60 or not bars:
+            return out                    # 1時間足は過去の日の足そのものが表示されているので、足す必要がない
+        hi, lo = max(b.high for b in day), min(b.low for b in day)
+        extra = [dict(side=x["side"], level=x["level"]) for x in self.hourly_external(symbol)]
+        prev = self.prev_days.get(symbol)
+        if prev:
+            extra += [dict(side="high", level=prev["high"]), dict(side="low", level=prev["low"])]
+        first = bars[0].start.isoformat()
+        for x in extra:
+            lv = x["level"]
+            if lv is None or (x["side"] == "high" and hi > lv) or (x["side"] == "low" and lo < lv):
+                continue                  # 当日すでに抜かれた（流動性は使われた）
+            same = next((o for o in out if o["side"] == x["side"] and abs(o["level"] - lv) <= lv * 0.0002), None)
+            if same:
+                same["kind"] = "external"
+            else:
+                out.append(dict(side=x["side"], t=first, level=lv, kind="external"))
+        return out
+
     def swing_params(self, minutes: int) -> "sweep.SweepParams":
         """外部流動性とみなす「大きな波」の幅を、足の長さに合わせる（左右それぞれ約45分。最低10本）。"""
         return replace(self.sweep_params, major=max(10, 45 // max(1, minutes)))
@@ -665,11 +689,10 @@ class PaperEngine:
                     prev_day=self.prev_days.get(symbol),
                     shown_day=base[0].start.date().isoformat() if base else None,
                     live=bool(self.history.get(symbol)),
-                    htf_liquidity=self.hourly_external(symbol) if minutes and minutes < 60 else [],
                     quote=self.quotes.get(symbol),
                     range_pct=self.range_pct(symbol), day_range_pct=self.day_range_pct(symbol),
                     structure=fvg.structure(tail, self.fvg_params) if bars else None,
-                    liquidity=sweep.liquidity_levels(bars[-330:], self.swing_params(minutes)) if bars else [],
+                    liquidity=self.chart_liquidity(symbol, bars[-330:], minutes, base) if bars else [],
                     pools=[dict(t=tail[i].start.isoformat(), level=lv)
                            for i, lv in sweep.pools(tail, self.sweep_params)] if bars else [],
                     bars=[dict(t=b.start.isoformat(), o=b.open, h=b.high, l=b.low, c=b.close,

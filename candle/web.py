@@ -96,7 +96,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <div class="kpis" id="qinfo" style="padding:10px 16px 0;gap:18px"></div>
 <div id="mtf" style="padding:10px 16px 0;font-size:13px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>
 <div style="padding:6px 16px 0;font-size:12px" class="mut"><span style="display:inline-block;width:22px;border-top:2px solid var(--acc);vertical-align:middle;margin-right:5px"></span>VWAP（受信した値。受信前の時間帯は線がありません）</div>
-<div style="padding:4px 16px 0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px" class="mut"><span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--up);vertical-align:middle;margin-right:5px"></span>直近の上昇の範囲（中央の線より上が割高ゾーン、下が割安ゾーン）</span><span><span style="display:inline-block;width:18px;height:8px;background:var(--warn);opacity:.75;vertical-align:middle;margin-right:5px"></span>上昇中の出来高の分布</span><span><span style="display:inline-block;width:18px;height:8px;border:1.5px solid var(--warn);vertical-align:middle;margin-right:5px"></span>FVG</span><span><span style="display:inline-block;width:18px;border-top:2px solid #d4a700;vertical-align:middle;margin-right:5px"></span>上昇前のレンジのPOC</span><span><span style="display:inline-block;width:18px;height:0;border-top:3px solid var(--up);vertical-align:middle;margin-right:5px"></span>外部流動性（当日の高値・安値、大きな波の高値・安値）</span><span><span style="display:inline-block;width:18px;height:0;border-top:1px dashed var(--warn);vertical-align:middle;margin-right:5px"></span>内部流動性（その内側の小さな波。まだ抜かれていないもの）</span></div>
+<div style="padding:4px 16px 0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px" class="mut"><span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--up);vertical-align:middle;margin-right:5px"></span>直近の上昇の範囲（中央の線より上が割高ゾーン、下が割安ゾーン）</span><span><span style="display:inline-block;width:18px;height:8px;background:var(--warn);opacity:.75;vertical-align:middle;margin-right:5px"></span>上昇中の出来高の分布</span><span><span style="display:inline-block;width:18px;height:8px;border:1.5px solid var(--warn);vertical-align:middle;margin-right:5px"></span>FVG</span><span><span style="display:inline-block;width:18px;border-top:2px solid #d4a700;vertical-align:middle;margin-right:5px"></span>上昇前のレンジのPOC</span><span><span style="display:inline-block;width:18px;height:0;border-top:3px solid var(--up);vertical-align:middle;margin-right:5px"></span>外部流動性（当日・前日・数日間の、大きな高値と安値）</span><span><span style="display:inline-block;width:18px;height:0;border-top:1px dashed var(--warn);vertical-align:middle;margin-right:5px"></span>内部流動性（その内側の小さな波。まだ抜かれていないもの）</span></div>
 <div class="chart"><svg id="svg" role="img"></svg><div class="tip" id="tip"></div></div>
 <div id="tinfo" style="padding:8px 16px 0;font-size:13px"></div><div class="note" id="note"></div></dialog>
 <script>
@@ -223,18 +223,10 @@ function draw(data){
       if(used.some(u=>Math.abs(u.y-py)<13&&a<u.b&&b>u.a))continue;used.push({y:py,a,b});
       svg.appendChild(el('text',{x:xx,y:py,'text-anchor':anchor,fill:col,'font-size':bold?12:11,'font-weight':bold?700:400,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},txt));return}};
   const liq=[...(data.liquidity||[])].sort((a,b)=>(a.kind==='external'?0:1)-(b.kind==='external'?0:1));   // 外部のラベルを優先
-  for(const q of liq){const pi=bars.findIndex(b=>b.t===q.t);if(pi<0)continue;const ext=q.kind==='external',up=q.side==='high',py=y(q.level),th=ext?9:5,col=ext?'var(--up)':'var(--warn)',x0=x(pi)-bw/2;
+  for(const q of liq){const pi=bars.findIndex(b=>b.t===q.t);if(pi<0||q.level<=lo||q.level>=hi)continue;const ext=q.kind==='external',up=q.side==='high',py=y(q.level),th=ext?9:5,col=ext?'var(--up)':'var(--warn)',x0=x(pi)-bw/2;
     svg.appendChild(el('rect',{x:x0,y:up?py-th:py,width:(W-R)-x0,height:th,fill:col,'fill-opacity':ext?.22:.12}));
     svg.appendChild(el('line',{x1:x0,x2:W-R,y1:py,y2:py,stroke:col,'stroke-width':ext?2.5:1,'stroke-dasharray':ext?'none':'4 3'}));
     place((W-R)-4,up?py-th-3:py+th+11,'end',col,ext,(ext?'外部流動性':'内部流動性')+(up?'（上）':'（下）')+' '+fmt(q.level))}
-  // 前日の高値・安値（上位足の外部流動性）。今の表示範囲に入るときだけ線を引く
-  if(data.prev_day)for(const [v,label] of [[data.prev_day.high,'前日高値'],[data.prev_day.low,'前日安値']]){if(v==null||v<=lo||v>=hi)continue;
-    svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(v),y2:y(v),stroke:'var(--fg)','stroke-width':2,'stroke-dasharray':'10 5'}));
-    place(L+4,y(v)-4,'start','var(--fg)',true,label+((data.htf_liquidity||[]).some(q=>q.level===v)?'・1時間足の外部流動性 ':'（上位足の外部流動性） ')+fmt(v))}
-  // 1時間足（数日分）の外部流動性。今の表示範囲に入るときだけ線を引く
-  for(const q of (data.htf_liquidity||[])){if(q.level<=lo||q.level>=hi)continue;const up=q.side==='high';if(data.prev_day&&(q.level===data.prev_day.high||q.level===data.prev_day.low))continue;   // 前日の高値・安値と同じ線は1本にまとめる
-    svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(q.level),y2:y(q.level),stroke:'var(--fg)','stroke-width':2,'stroke-dasharray':'10 5'}));
-    place(L+4,up?y(q.level)-4:y(q.level)+14,'start','var(--fg)',true,'1時間足の外部流動性（'+(up?'上':'下')+'） '+fmt(q.level))}
   const w=Math.max(1,Math.min(14,bw*0.7));
   // 出来高（株価とは別の枠。縦軸は共有しない）
   const vTop=H-26-VH,vBot=H-26,vraw=Math.max(...bars.map(b=>b.v),1),vs=bars.map(b=>b.v).sort((a,b)=>a-b),v98=vs[Math.floor((vs.length-1)*0.98)]||vraw,vmax=vraw>v98*3?v98*1.3:vraw,vy=v=>vBot-(Math.min(v,vmax)/vmax)*VH;   // 引けなどの飛び抜けた出来高に合わせると他が見えなくなるので、上限を決める
@@ -286,7 +278,6 @@ async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?
   const TC={up:'pos',down:'neg'},fr=d.frames||[],pd=d.prev_day;
   $('mtf').innerHTML=(fr.length?'<span class="mut">足の切り替え</span>'+fr.map(f=>`<button data-tf="${f.minutes===d.base_minutes?0:f.minutes}" style="padding:3px 10px${(curTf||d.base_minutes)===f.minutes?';border-color:var(--acc);color:var(--acc);font-weight:700':''}">${esc(f.name)}</button>`).join('')+
     '<span class="mut" style="margin-left:10px">向き</span>'+fr.map(f=>`<span>${esc(f.name)} <b class="${TC[f.trend]||'mut'}">${esc(f.label)}</b></span>`).join('<span class="mut">／</span>'):'')+
-    ((d.htf_liquidity||[]).length?`<span class="mut" style="margin-left:10px">1時間足の外部流動性</span><span>${['high','low'].map(sd=>{const v=d.htf_liquidity.filter(q=>q.side===sd).map(q=>n(q.level,1));return v.length?(sd==='high'?'上 ':'下 ')+'<b>'+v.join('・')+'</b>':''}).filter(Boolean).join('　')}</span>`:'')+
     (pd?`<span class="mut" style="margin-left:10px">前日（${pd.day.slice(5)}）</span><span>高値 <b>${n(pd.high,1)}</b>　安値 <b>${n(pd.low,1)}</b>　終値 <b>${n(pd.close,1)}</b></span>`:'');
   const tt=(state?.history||[]).find(t=>t.id===curTrade),hmm=s=>new Date(s).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'});
   $('tinfo').innerHTML=tt?`<b>この取引</b>　${md(tt.entry_time)} 買 ${n(tt.entry_price,1)} → ${hmm(tt.exit_time)} 売 ${n(tt.exit_price,1)}　${yen(tt.pnl)}　<span class="mut">${esc(tt.reason||'')}／最初の損切り ${n(tt.initial_stop,1)}／${n(tt.qty)}株</span>`+(d.bars.length?'':'　<span class="warn">この日の足が保存されていません</span>'):'';

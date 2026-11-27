@@ -101,10 +101,11 @@ def test_hourly_frame_uses_past_days_and_its_external_liquidity(tmp_path):
     assert min(x["level"] for x in hx if x["side"] == "low") == 999                      # 数日間の安値
     assert any(x["side"] == "high" and x["level"] == 1061 for x in hx)
     hour = e.chart_data("T", 60)
-    assert hour["minutes"] == 60 and len(hour["bars"]) == 19 and hour["htf_liquidity"] == []
+    assert hour["minutes"] == 60 and len(hour["bars"]) == 19
     one = e.chart_data("T")
     assert one["frames"][-1]["name"] == "1時間足" and one["frames"][-1]["bars"] == 19
-    assert {x["level"] for x in one["htf_liquidity"]} >= {999, 1061}
+    ext = {(x["side"], x["level"]) for x in one["liquidity"] if x["kind"] == "external"}
+    assert ("low", 999) in ext and ("high", 1061) in ext            # 数日間の高値・安値も、同じ「外部流動性」として出る
     assert e.htf("T").split(",")[-1].startswith("60:")
 
 
