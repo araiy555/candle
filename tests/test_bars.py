@@ -109,3 +109,16 @@ def test_config_with_bom_and_one_minute(tmp_path):
     p = tmp_path / "config.toml"
     p.write_bytes(b"\xef\xbb\xbf[bars]\nminutes = 1\n")
     assert load_config(p).bar_minutes == 1
+
+
+def test_first_trade_of_day_ignores_stale_day_low():
+    """その日の最初の約定では、配信の当日安値（前日の値が残っていることがある）で足を補正しない。"""
+    from datetime import datetime
+    from candle.bars import JST, BarBuilder
+    bb = BarBuilder(1)
+    t = lambda h, m, s=0: datetime(2026, 11, 27, h, m, s, tzinfo=JST)
+    bb.on_tick("T", t(8, 59), 4625, 0, None, None)                     # 寄り付き前（基準）
+    bb.on_tick("T", t(9, 0, 1), 4600, 1000, 4713, 4584)                # 最初の約定。高安は前日の値のまま
+    bb.on_tick("T", t(9, 0, 30), 4610, 2000, 4612, 4598)               # 以降は当日の値
+    (bar,) = bb.on_tick("T", t(9, 1, 5), 4605, 3000, 4612, 4598)
+    assert (bar.open, bar.high, bar.low, bar.close) == (4600, 4610, 4600, 4610)   # 前日の値を足に混ぜない

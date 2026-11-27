@@ -245,6 +245,10 @@ class PaperEngine:
         d = self.direction_text(symbol)
         self.notify(title, f"{body}　{d}" if d else body, symbol)
 
+    def swing_params(self, minutes: int) -> "sweep.SweepParams":
+        """外部流動性とみなす「大きな波」の幅を、足の長さに合わせる（左右それぞれ約45分。最低10本）。"""
+        return replace(self.sweep_params, major=max(10, 45 // max(1, minutes)))
+
     def hourly_external(self, symbol: str) -> list[dict]:
         """過去の日をつなげた1時間足から見た外部流動性（数日間の大きな高値・安値）。上位足の流動性として使う。"""
         past = self.hourly_past.get(symbol)
@@ -367,7 +371,7 @@ class PaperEngine:
         if not self.sweep_on:
             return
         # 流動性は当日の足すべてから探す（約定の無かった分や昼休みで途切れていても、高値・安値は有効）
-        sig = sweep.detect(list(history)[-330:], self.sweep_params)
+        sig = sweep.detect(list(history)[-330:], self.swing_params(bar.minutes))
         if sig is None:
             return
         m, prev = sig.metrics, self.prev_days.get(bar.symbol)
@@ -665,7 +669,7 @@ class PaperEngine:
                     quote=self.quotes.get(symbol),
                     range_pct=self.range_pct(symbol), day_range_pct=self.day_range_pct(symbol),
                     structure=fvg.structure(tail, self.fvg_params) if bars else None,
-                    liquidity=sweep.liquidity_levels(bars[-330:], self.sweep_params) if bars else [],
+                    liquidity=sweep.liquidity_levels(bars[-330:], self.swing_params(minutes)) if bars else [],
                     pools=[dict(t=tail[i].start.isoformat(), level=lv)
                            for i, lv in sweep.pools(tail, self.sweep_params)] if bars else [],
                     bars=[dict(t=b.start.isoformat(), o=b.open, h=b.high, l=b.low, c=b.close,

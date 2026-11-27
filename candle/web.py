@@ -219,27 +219,33 @@ function draw(data){
       if(st.range_poc!=null&&st.range_poc>lo&&st.range_poc<hi){svg.appendChild(el('line',{x1:L,x2:right,y1:y(st.range_poc),y2:y(st.range_poc),stroke:'#d4a700','stroke-width':1.5}));
         svg.appendChild(el('text',{x:L+4,y:y(st.range_poc)+14,fill:'var(--fg)','font-size':11,stroke:'var(--card)','stroke-width':4,'paint-order':'stroke'},'上昇前のレンジのPOC '+fmt(st.range_poc)))}}}
   // 流動性（まだ抜かれていない高値・安値。その先に損切りがたまりやすい）。外部＝大きな波・当日高安、内部＝その内側の小さな波
-  for(const q of (data.liquidity||[])){const pi=bars.findIndex(b=>b.t===q.t);if(pi<0)continue;const ext=q.kind==='external',up=q.side==='high',py=y(q.level),th=ext?9:5,col=ext?'var(--up)':'var(--warn)',x0=x(pi)-bw/2;
+  // ラベルが重なるときは、左へずらして並べる（それでも重なるものは線だけにする）
+  const used=[],place=(px,py,anchor,col,bold,txt)=>{const wd=txt.length*12+8;for(let k=0;k<3;k++){const xx=anchor==='end'?px-k*(wd+10):px+k*(wd+10),a=anchor==='end'?xx-wd:xx,b=a+wd;
+      if(used.some(u=>Math.abs(u.y-py)<13&&a<u.b&&b>u.a))continue;used.push({y:py,a,b});
+      svg.appendChild(el('text',{x:xx,y:py,'text-anchor':anchor,fill:col,'font-size':bold?12:11,'font-weight':bold?700:400,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},txt));return}};
+  const liq=[...(data.liquidity||[])].sort((a,b)=>(a.kind==='external'?0:1)-(b.kind==='external'?0:1));   // 外部のラベルを優先
+  for(const q of liq){const pi=bars.findIndex(b=>b.t===q.t);if(pi<0)continue;const ext=q.kind==='external',up=q.side==='high',py=y(q.level),th=ext?9:5,col=ext?'var(--up)':'var(--warn)',x0=x(pi)-bw/2;
     svg.appendChild(el('rect',{x:x0,y:up?py-th:py,width:(W-R)-x0,height:th,fill:col,'fill-opacity':ext?.22:.12}));
     svg.appendChild(el('line',{x1:x0,x2:W-R,y1:py,y2:py,stroke:col,'stroke-width':ext?2.5:1,'stroke-dasharray':ext?'none':'4 3'}));
-    svg.appendChild(el('text',{x:(W-R)-4,y:up?py-th-3:py+th+11,'text-anchor':'end',fill:col,'font-size':ext?12:11,'font-weight':ext?700:400,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},(ext?'外部流動性':'内部流動性')+(up?'（上）':'（下）')+' '+fmt(q.level)))}
+    place((W-R)-4,up?py-th-3:py+th+11,'end',col,ext,(ext?'外部流動性':'内部流動性')+(up?'（上）':'（下）')+' '+fmt(q.level))}
   // 前日の高値・安値（上位足の外部流動性）。今の表示範囲に入るときだけ線を引く
   if(data.prev_day)for(const [v,label] of [[data.prev_day.high,'前日高値'],[data.prev_day.low,'前日安値']]){if(v==null||v<=lo||v>=hi)continue;
     svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(v),y2:y(v),stroke:'var(--fg)','stroke-width':2,'stroke-dasharray':'10 5'}));
-    svg.appendChild(el('text',{x:L+4,y:y(v)-4,fill:'var(--fg)','font-size':12,'font-weight':700,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},label+'（上位足の外部流動性） '+fmt(v)))}
+    place(L+4,y(v)-4,'start','var(--fg)',true,label+((data.htf_liquidity||[]).some(q=>q.level===v)?'・1時間足の外部流動性 ':'（上位足の外部流動性） ')+fmt(v))}
   // 1時間足（数日分）の外部流動性。今の表示範囲に入るときだけ線を引く
-  for(const q of (data.htf_liquidity||[])){if(q.level<=lo||q.level>=hi)continue;const up=q.side==='high';
+  for(const q of (data.htf_liquidity||[])){if(q.level<=lo||q.level>=hi)continue;const up=q.side==='high';if(data.prev_day&&(q.level===data.prev_day.high||q.level===data.prev_day.low))continue;   // 前日の高値・安値と同じ線は1本にまとめる
     svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(q.level),y2:y(q.level),stroke:'var(--fg)','stroke-width':2,'stroke-dasharray':'10 5'}));
-    svg.appendChild(el('text',{x:L+4,y:up?y(q.level)-4:y(q.level)+14,fill:'var(--fg)','font-size':12,'font-weight':700,stroke:'var(--card)','stroke-width':3,'paint-order':'stroke'},'1時間足の外部流動性（'+(up?'上':'下')+'） '+fmt(q.level)))}
+    place(L+4,up?y(q.level)-4:y(q.level)+14,'start','var(--fg)',true,'1時間足の外部流動性（'+(up?'上':'下')+'） '+fmt(q.level))}
   const w=Math.max(1,Math.min(14,bw*0.7));
   // 出来高（株価とは別の枠。縦軸は共有しない）
-  const vTop=H-26-VH,vBot=H-26,vmax=Math.max(...bars.map(b=>b.v),1),vy=v=>vBot-(v/vmax)*VH;
+  const vTop=H-26-VH,vBot=H-26,vraw=Math.max(...bars.map(b=>b.v),1),vs=bars.map(b=>b.v).sort((a,b)=>a-b),v98=vs[Math.floor((vs.length-1)*0.98)]||vraw,vmax=vraw>v98*3?v98*1.3:vraw,vy=v=>vBot-(Math.min(v,vmax)/vmax)*VH;   // 引けなどの飛び抜けた出来高に合わせると他が見えなくなるので、上限を決める
   svg.appendChild(el('line',{x1:L,x2:W-R,y1:vBot,y2:vBot,stroke:'var(--line)','stroke-width':1}));
-  svg.appendChild(el('text',{x:L,y:vTop-6,fill:'var(--mut)','font-size':11},'出来高（1本ごと）'));
+  svg.appendChild(el('text',{x:L,y:vTop-6,fill:'var(--mut)','font-size':11},'出来高（1本ごと。▲は目盛りを超えた足）'));
   svg.appendChild(el('text',{x:W-R+6,y:vTop+4,fill:'var(--mut)','font-size':11},vmax.toLocaleString('ja-JP')));
   svg.appendChild(el('text',{x:W-R+6,y:vBot+4,fill:'var(--mut)','font-size':11},'0'));
   bars.forEach((b,i)=>{if(!(b.v>0))return;const col=b.c>b.o?'var(--up)':b.c<b.o?'var(--down)':'var(--mut)';
-    svg.appendChild(el('rect',{x:x(i)-w/2,y:vy(b.v),width:w,height:Math.max(1,vBot-vy(b.v)),fill:col,opacity:b.ok?.75:.3}))});
+    svg.appendChild(el('rect',{x:x(i)-w/2,y:vy(b.v),width:w,height:Math.max(1,vBot-vy(b.v)),fill:col,opacity:b.ok?.75:.3}));
+    if(b.v>vmax)svg.appendChild(el('path',{d:`M${x(i)},${vTop-7} l4,6 h-8 z`,fill:'var(--fg)'}))});   // 上限を超えた足には▲
   bars.forEach((b,i)=>{const col=b.c>b.o?'var(--up)':b.c<b.o?'var(--down)':'var(--mut)',g=el('g',{opacity:b.ok?1:.35});
     g.appendChild(el('line',{x1:x(i),x2:x(i),y1:y(b.h),y2:y(b.l),stroke:col,'stroke-width':1}));
     const top=y(Math.max(b.o,b.c)),h=Math.max(1,y(Math.min(b.o,b.c))-top);

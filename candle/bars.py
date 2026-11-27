@@ -61,6 +61,7 @@ class _State:
     bar: Bar | None = None
     next_incomplete: bool = False  # 次に作る足は途中参加なので不完全
     last_closed_start: datetime | None = None
+    traded: date | None = None     # 約定を受信した日。当日高安での補正は、当日すでに約定を見てからにする
 
 
 def bucket_start(ts: datetime, minutes: int = 5) -> datetime | None:
@@ -168,10 +169,13 @@ class BarBuilder:
         b.high = max(b.high, price)
         b.low = min(b.low, price)
         # 配信の合間に付いた高値・安値を当日高安の更新から拾う
-        if new_high and day_high is not None:
-            b.high = max(b.high, day_high)
-        if new_low and day_low is not None:
-            b.low = min(b.low, day_low)
+        # （その日の最初の約定では使わない。配信の当日高安が、まだ前日の値のままのことがあるため）
+        if st.traded == ts.date():
+            if new_high and day_high is not None:
+                b.high = max(b.high, day_high)
+            if new_low and day_low is not None:
+                b.low = min(b.low, day_low)
+        st.traded = ts.date()
         b.volume += delta
         b.ticks += 1
         return closed
