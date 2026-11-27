@@ -226,6 +226,8 @@ const dt=s=>new Date(s).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',month:'num
 const lab=h=>h<60?h+'秒後':(h/60)+'分後';
 const G='<span class="tag">取得</span>',C='<span class="tag c">計算</span>';
 let H=[10,30,60,180,300],data=null;
+const ZN={discount:'割安ゾーン',premium:'割高ゾーン',below:'起点より下'};
+function scene(m){if(m.liquidity==null)return '<span class="mut">記録なし</span>';return (m.bos_setup?'<b class="ok">BOS後の押し目</b> ':'')+`<span class="mut">${m.after_bos?'BOS後':'BOSなし'}／${ZN[m.zone]||'判定できず'}／${m.liquidity==='internal'?'内部':'外部'}</span>`}
 function hcell(v){if(v.pending)return '<span class="mut">記録中</span>';if(v.missing)return `<span class="miss" title="${esc(v.missing)}">欠損</span>`;return pct(v.ret)}
 function table(heads,rows,cls){return '<table><thead><tr>'+heads.map(h=>`<th${h.l?' class="l"':''}>${h.t??h}</th>`).join('')+'</tr></thead><tbody>'+rows.map(r=>`<tr${r.attr||''}>`+r.cells.map(c=>`<td${c&&c.l?' class="l"':c&&c.w?' class="wrap"':''}>${c&&c.v!==undefined?c.v:c}</td>`).join('')+'</tr>').join('')+'</tbody></table>'}
 async function loadList(){
@@ -258,9 +260,9 @@ async function loadList(){
         e.status==='tracking'?'<span class="mut">記録中</span>':pct(c.max_up),e.status==='tracking'?'<span class="mut">記録中</span>':pct(c.max_down),
         {l:1,v:e.status==='done'?'完了':e.status==='tracking'?'<span class="mut">記録中</span>':`<span class="miss" title="${esc(e.gap_reason||'')}">途中まで（${n(q.tracked_seconds,0)}秒）</span>`}]}}));
     $('listnote').textContent='結果は、検知から5分以内に「目標（買う価格の7ティック上）」と「損切りの目安（厚い買い板の1ティック下）」のどちらに先に届いたかです。実際に買えたかどうかは含みません。行をクリックすると詳細を開きます。';return}
-  if(kind==='sweep'){$('list').innerHTML=table([{t:'日時',l:1},{t:'銘柄',l:1},'回復後の株価','押し安値（プール）','割り込んだ安値','割り込み幅','出来高比','回復まで',...H.map(lab),'最大上昇','最大下落',{t:'状態',l:1}],
+  if(kind==='sweep'){$('list').innerHTML=table([{t:'日時',l:1},{t:'銘柄',l:1},{t:'場面',l:1},'回復後の株価','押し安値（プール）','割り込んだ安値','割り込み幅','出来高比','回復まで',...H.map(lab),'最大上昇','最大下落',{t:'状態',l:1}],
       d.events.map(e=>{const q=e.acquired,c=e.computed,m=e.metrics;return {attr:` class="row" data-id="${e.id}"`,cells:[{l:1,v:dt(q.time)},{l:1,v:`<a href="#${e.id}">${esc(q.symbol)} ${esc(q.name||'')}</a>`},
-        num(q.price,1),num(m.level,1),num(m.sweep_low,1),m.depth_pct==null?MISS:'-'+n(m.depth_pct,2)+'%',m.volume_ratio==null?MISS:n(m.volume_ratio,1)+'倍',m.reclaim_bars==null?MISS:m.reclaim_bars+'本',...H.map(h=>hcell(e.horizons[h])),
+        {l:1,v:scene(m)},num(q.price,1),num(m.level,1),num(m.sweep_low,1),m.depth_pct==null?MISS:'-'+n(m.depth_pct,2)+'%',m.volume_ratio==null?MISS:n(m.volume_ratio,1)+'倍',m.reclaim_bars==null?MISS:m.reclaim_bars+'本',...H.map(h=>hcell(e.horizons[h])),
         e.status==='tracking'?'<span class="mut">記録中</span>':pct(c.max_up),e.status==='tracking'?'<span class="mut">記録中</span>':pct(c.max_down),
         {l:1,v:e.status==='done'?'完了':e.status==='tracking'?'<span class="mut">記録中</span>':`<span class="miss" title="${esc(e.gap_reason||'')}">途中まで（${n(q.tracked_seconds,0)}秒）</span>`}]}}));
     $('listnote').textContent='騰落率は、押し安値の上に戻した足の終値からの変化です。割り込み幅・出来高比は計算した値です。行をクリックすると詳細を開きます。';return}
@@ -290,7 +292,7 @@ function drawCandles(e){
   // 種類ごとの目印（価格の線）
   const lines=[];const add=(v,label,col,dash)=>{if(v!=null)lines.push({v,label,col,dash})};
   if(e.kind==='fvg'){add(m.poc,'POC','#d4a700');add(m.pullback_low,'押しの安値','var(--mut)','3 3')}
-  else if(e.kind==='sweep'){add(m.level,'押し安値（流動性プール）','var(--warn)');add(m.sweep_low,'割り込んだ安値','var(--mut)','3 3')}
+  else if(e.kind==='sweep'){add(m.level,'押し安値（流動性プール）','var(--warn)');add(m.sweep_low,'割り込んだ安値','var(--mut)','3 3');add(m.bos_level,'抜いた戻り高値（BOS）','var(--up)','6 4');if(m.leg_low!=null&&m.leg_high!=null)add((m.leg_low+m.leg_high)/2,'上昇の中間（これより下が割安ゾーン）','var(--acc)','2 4')}
   else if(e.kind==='open'){add(m.target,'目標','var(--up)','5 4');add(m.entry,'買う価格','var(--acc)');add(m.wall_price,'厚い買い板','var(--warn)');add(m.stop,'損切りの目安','var(--down)','5 4')}
   else if(e.kind==='wall'){add(m.wall_price,'売り板','var(--warn)')}
   let lo=Math.min(...bars.map(b=>b.l)),hi=Math.max(...bars.map(b=>b.h));const span=hi-lo||hi*0.002;
@@ -366,7 +368,7 @@ async function loadDetail(id){
       ['厚い買い板 '+G,num(m.wall_price,1,'円')+' に '+num(m.wall_qty,0,'株')],['他の買い板の何倍か '+C,m.ratio==null?MISS:n(m.ratio,1)+'倍'],['始値 '+G,num(m.open,1,'円')],['当日高値 '+G,num(m.day_high,1,'円')],['1ティック '+C,num(m.tick,1,'円')]]
       .map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('')}
   else if(e.kind==='sweep'){$('dkpis').innerHTML=[['回復後の株価 '+G,num(q.price,1,'円')],['前日比 '+G,q.change==null?MISS:`${q.change>0?'+':''}${n(q.change,1)}円（${pct(q.change_pct)}）`],['押し安値（流動性プール） '+C,num(m.level,1,'円')],['割り込んだ安値 '+C,num(m.sweep_low,1,'円')],['割り込み幅 '+C,m.depth_pct==null?MISS:n(m.depth_pct,2)+'%'],
-      ['出来高比 '+C,m.volume_ratio==null?MISS:n(m.volume_ratio,1)+'倍'],['割り込んだ足の出来高 '+C,num(m.sweep_volume,0,'株')],['プールができてから '+C,num(m.bars_since_pool,0,'本')]]
+      ['出来高比 '+C,m.volume_ratio==null?MISS:n(m.volume_ratio,1)+'倍'],['割り込んだ足の出来高 '+C,num(m.sweep_volume,0,'株')],['プールができてから '+C,num(m.bars_since_pool,0,'本')],['場面 '+C,scene(m)],['抜いた戻り高値（BOS） '+C,m.bos_level==null?'<span class="mut">なし</span>':num(m.bos_level,1,'円')]]
       .map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join('')}
   else if(wall){$('dkpis').innerHTML=[['結果 '+C,esc(m.outcome_label||'')],['その時点の株価 '+G,num(q.price,1,'円')],['売り板の価格 '+G,num(m.wall_price,1,'円')],['最大数量 '+G,num(m.max_qty,0,'株')],['金額 '+C,m.wall_value==null?MISS:n(m.wall_value/1e8,2)+'億円'],
       ['約定で減少 '+C,num(m.executed,0,'株')+`（${n(m.executed_share*100,0)}%）`],['取消で減少 '+C,num(m.cancelled,0,'株')],['補充 '+C,num(m.added,0,'株')],['板に出ていた時間 '+C,num(m.seconds,0,'秒')]]

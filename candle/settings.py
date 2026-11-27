@@ -9,6 +9,8 @@ STOP_MODES = {"pattern_low": "パターンの安値", "percent": "買値から�
 TRAIL_MODES = {"r_step": "リスク幅（R）ごとに引き上げ", "percent": "高値から一定率（%）下に追従",
                "yen": "高値から一定額（円）下に追従", "none": "トレーリングなし"}
 
+OLD_NOTIFY = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip"
+
 
 @dataclass
 class TradeSettings:
@@ -26,7 +28,9 @@ class TradeSettings:
     quiet_open_min: float = 15       # 寄り付き（9:00）からこの分数は、通知も売買もしない
     min_price: float = 500           # 株価の下限（円）。これより安い銘柄は通知も売買もしない。0なら除かない
     # 通知するサイン（戦略IDをカンマ区切り）。管理画面のチェックで選ぶ
-    notify_on: str = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip"
+    notify_on: str = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip,bos_dip"
+    # 画面に出したことのあるサイン。後から増えたサインを、保存済みの設定にも初期状態（オン）で足すために使う
+    notify_seen: str = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip,bos_dip"
     min_range_pct: float = 0.15      # 足の平均値幅率の下限（%）。これ未満は値動きが小さい（レンジ）とみなして見送る。0なら除かない
     vwap_rule: str = "above"        # above=株価がVWAPより下のときは買わない / off=VWAPを見ない
     min_drop_pct: float = 0.3        # 直前の下落率の下限（%）。横ばいの中のサインを除く。0なら除かない
@@ -104,6 +108,13 @@ class TradeSettings:
         for k, v in data.items():
             if k in base:
                 base[k] = type(base[k])(v)
+        if "notify_on" in data:
+            # 保存した後に増えたサインは、オンの状態で加える（旧版の設定には notify_seen が無い）
+            seen = str(data.get("notify_seen", OLD_NOTIFY)).split(",")
+            new = [x for x in cls().notify_seen.split(",") if x not in seen]
+            if new:
+                base["notify_on"] = ",".join([x for x in base["notify_on"].split(",") if x] + new)
+            base["notify_seen"] = cls().notify_seen
         s = cls(**base)
         s.validate()
         return s

@@ -28,6 +28,8 @@ class SweepParams:
     max_depth: float = 0.01      # 割り込みがこれより深い場合は対象外（急落であって、狩りではない）
     vol_avg: int = 10
     vol_mult: float = 2.0        # 平均の何倍で「出来高が増えた」とみなすか
+    bos_lookback: int = 60       # 上へのブレイク（BOS）と、直近の上昇を探す本数
+    min_leg: float = 0.004       # 上昇とみなす最小の値幅（安値比）
 
 
 @dataclass
@@ -56,6 +58,72 @@ def pools(bars: Sequence[Bar], p: SweepParams | None = None, upto: int | None = 
             continue                                  # すでに割られた
         out.append((i, low))
     return out
+
+
+def find_bos(bars: Sequence[Bar], upto: int, p: SweepParams) -> dict | None:
+    """upto より前で、いちばん新しい「上へのブレイク（BOS）」を探す。
+
+    BOS: それまで抜かれていなかった戻り高値（左右の足より高い高値）を、終値で上に抜けた足。
+    抜けたということは、そこで新しく買った人がいて、その損切りが下にたまる（内部流動性）。
+    """
+    start = max(p.pivot, upto - p.bos_lookback)
+    highs = [k for k in range(start, upto - p.pivot)
+             if all(bars[j].high <= bars[k].high for j in range(k - p.pivot, k + p.pivot + 1) if j != k)]
+    best = None
+    for k in highs:
+        level = bars[k].high
+        j = next((j for j in range(k + p.pivot + 1, upto) if bars[j].close > level), None)
+        if j is None:
+            continue
+        if best is None or j > best["bos_index"] or (j == best["bos_index"] and level > best["bos_level"]):
+            prev = bars[max(0, j - p.vol_avg):j]
+            avg = sum(b.volume for b in prev) / len(prev) if prev else 0.0
+            best = dict(bos_index=j, bos_high_index=k, bos_level=level, bos_time=bars[j].start.isoformat(),
+                        bos_volume_ratio=bars[j].volume / avg if avg > 0 else None)
+    return best
+
+
+def context(bars: Sequence[Bar], s: int, i: int, level: float, low: float, p: SweepParams) -> dict:
+    """スイープが起きた場面の分類（後で、どの場面のスイープが効くのかを比べるための印）。
+
+      after_bos : 上へのブレイク（BOS）の後で、割られた押し安値が、抜かれた高値より後にできたもの
+      zone      : 直近の上昇（安値〜高値）の中での位置。discount=割安（下半分） / premium=割高 / below=範囲の下
+      liquidity : external=当日安値を割った（外部流動性） / internal=当日安値より上の押し安値（内部流動性）
+    """
+    bos = find_bos(bars, s, p)
+    after_bos = bool(bos and i > bos["bos_high_index"])
+    day_low = min(b.low for b in bars[:s])
+    seg = bars[max(0, s - p.bos_lookback):s]
+    ih = max(range(len(seg)), key=lambda k: (seg[k].high, k))
+    leg_high = seg[ih].high
+    leg_low = min(b.low for b in seg[:ih + 1])
+    zone = None
+    if leg_low > 0 and (leg_high - leg_low) / leg_low >= p.min_leg:
+        mid = (leg_low + leg_high) / 2
+        zone = "below" if low < leg_low else "discount" if low < mid else "premium"
+    out = dict(after_bos=after_bos, zone=zone, liquidity="external" if level <= day_low else "internal",
+               leg_low=leg_low, leg_high=leg_high, bos_setup=after_bos and zone == "discount")
+    if bos:
+        out.update(bos_level=bos["bos_level"], bos_time=bos["bos_time"], bos_volume_ratio=bos["bos_volume_ratio"])
+    return out
+
+
+ZONES = {"discount": "割安ゾーン", "premium": "割高ゾーン", "below": "上昇の起点より下", None: "判定できず"}
+
+
+def context_conditions(c: dict) -> list:
+    bos = (f"{c['bos_time'][11:16]} の足が、戻り高値 {c['bos_level']:,.1f}円を終値で上に抜けた"
+           + (f"（出来高 平均の{c['bos_volume_ratio']:.1f}倍）" if c.get("bos_volume_ratio") else "") + "。"
+           if c.get("bos_level") else "直近に、戻り高値を上に抜けた足は無い。")
+    return [
+        dict(key="bos", label="上へのブレイク（BOS）の後", ok=c["after_bos"],
+             text=bos + ("割られた押し安値は、その後にできたもの。" if c["after_bos"] else "")),
+        dict(key="zone", label="割安ゾーン", ok=c["zone"] == "discount",
+             text=f"直近の上昇 {c['leg_low']:,.1f}〜{c['leg_high']:,.1f}円の中で、{ZONES[c['zone']]}。"),
+        dict(key="liquidity", label="内部流動性", ok=c["liquidity"] == "internal",
+             text="当日安値より上の押し安値を割った（内部流動性）。" if c["liquidity"] == "internal"
+             else "当日安値を割った（外部流動性）。"),
+    ]
 
 
 def detect(bars: Sequence[Bar], p: SweepParams | None = None) -> SweepSignal | None:
@@ -101,6 +169,9 @@ def detect(bars: Sequence[Bar], p: SweepParams | None = None) -> SweepSignal | N
         metrics = dict(level=level, level_time=bars[i].start.isoformat(), sweep_low=low,
                        depth_pct=depth, volume_ratio=ratio, sweep_volume=vol, avg_volume=avg,
                        bars_since_pool=s - i, reclaim_bars=back + 1)
+        ctx = context(bars, s, i, level, low, p)
+        metrics.update(ctx)
+        conditions += context_conditions(ctx)
         return SweepSignal(cur.symbol, cur.end, cur.close, level, bars[i].start, low, note,
                            conditions, metrics)
     return None

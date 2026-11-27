@@ -32,7 +32,9 @@ def test_sweep_and_reclaim_in_one_bar_with_volume():
     sig = detect(bars_from(BASE + [(4942, 4945, 4915, 4944, 12000)]))    # 長い下ヒゲ
     assert sig is not None and (sig.level, sig.low, sig.price) == (4930, 4915, 4944)
     assert sig.metrics["volume_ratio"] > 3 and sig.metrics["reclaim_bars"] == 1
-    assert "割り込んだ後" in sig.note and len(sig.conditions) == 3
+    assert "割り込んだ後" in sig.note and len(sig.conditions) == 6
+    m = sig.metrics                                                     # 当日安値を割った＝外部流動性。割安ゾーンではない
+    assert (m["liquidity"], m["zone"], m["bos_setup"]) == ("external", "below", False)
 
 
 def test_reclaim_on_next_bar_counts_once():
@@ -79,3 +81,60 @@ def test_engine_notifies_and_records_sweep(tmp_path):
     assert ev["metrics"]["level"] == 4930 and ev["metrics"]["sweep_low"] == 4915
     assert squeeze_web.list_events(tmp_path / "c.sqlite")["events"] == []   # スクイーズの一覧には混ざらない
     assert e.chart_data("5803")["pools"] is not None
+
+
+# 戻り高値 1,010 を上に抜けて（BOS）1,040 まで上げ、押し安値 1,018 を付けた後、そこを割って戻す
+BOS = (flat(1000, 8) + [(1001, 1010, 1000, 1008, 3000), (1008, 1009, 1003, 1004, 3000)] + flat(1003, 6)
+       + [(1004, 1016, 1003, 1015, 9000), (1015, 1028, 1014, 1027, 5000), (1027, 1040, 1026, 1038, 5000),
+          (1038, 1039, 1030, 1031, 3000), (1031, 1032, 1024, 1025, 3000), (1025, 1026, 1018, 1021, 3000),
+          (1021, 1027, 1020, 1026, 3000), (1026, 1028, 1024, 1025, 3000), (1025, 1027, 1023, 1024, 3000),
+          (1024, 1026, 1022, 1023, 3000), (1023, 1025, 1021, 1022, 3000)])
+SWEEP = [(1022, 1023, 1015, 1020, 12000)]
+
+
+def test_sweep_after_bos_in_discount_zone_is_tagged():
+    from candle.sweep import find_bos
+    bars = bars_from(BOS + SWEEP)
+    bos = find_bos(bars, len(bars) - 1, SweepParams())
+    assert (bos["bos_level"], bos["bos_index"], bos["bos_volume_ratio"]) == (1010, 16, 3.0)
+    m = detect(bars).metrics
+    assert (m["after_bos"], m["zone"], m["liquidity"], m["bos_setup"]) == (True, "discount", "internal", True)
+    assert (m["leg_low"], m["leg_high"], m["bos_level"]) == (999, 1040, 1010)
+    high = bars_from(BOS[:-2] + [(1024, 1031, 1023, 1030, 3000), (1030, 1031, 1026, 1027, 3000)])
+    assert detect(high) is None                                          # 割っていなければ出ない
+
+
+def test_engine_notifies_bos_dip_and_keeps_plain_sweep_separate(tmp_path):
+    from candle import squeeze_web
+    from candle.engine import PaperEngine
+    from candle.risk import RiskLimits, RiskManager
+    from candle.store import Store
+
+    def run(sub, rows, **settings):
+        store, sent = Store(tmp_path / f"{sub}.sqlite"), []
+        e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"}, trade_enabled=False,
+                        notify=lambda *a: sent.append(a), notify_ids={"liq_sweep", "bos_dip"})
+        if settings:
+            e.update_settings(settings)
+        for b in bars_from(rows, symbol="5803"):
+            e.on_bar(b)
+        return sent, store, tmp_path / f"{sub}.sqlite"
+
+    sent, store, db = run("a", BOS + SWEEP)
+    assert [a[0] for a in sent] == ["BOS後の押し目  5803"]                # 1回だけ、BOS後の押し目として知らせる
+    assert store.recent_signals("paper")[0]["strategy_id"] == "bos_dip"
+    (ev,) = squeeze_web.list_events(db, kind="sweep")["events"]          # 履歴は流動性スイープとして残る
+    assert ev["metrics"]["bos_setup"] is True and ev["metrics"]["liquidity"] == "internal"
+    sent, store, _ = run("b", BOS + SWEEP, notify_on="liq_sweep")        # BOS後の押し目をオフ → 普通のスイープとして
+    assert [a[0] for a in sent] == ["流動性スイープ  5803"]
+    sent, store, db = run("c", BASE + [(4942, 4945, 4915, 4944, 12000)], notify_on="bos_dip")
+    assert sent == [] and store.recent_signals("paper") == []            # 条件に合わないスイープは知らせない
+    assert len(squeeze_web.list_events(db, kind="sweep")["events"]) == 1  # が、記録は残す
+
+
+def test_new_signal_is_added_to_saved_settings():
+    from candle.settings import TradeSettings
+    old = TradeSettings.from_dict({"notify_on": "tweezer_bottom,liq_sweep"})     # 旧版で保存した設定
+    assert old.notify_on == "tweezer_bottom,liq_sweep,bos_dip"                   # 後から増えたサインはオンで加わる
+    again = TradeSettings.from_dict({"notify_on": "tweezer_bottom", "notify_seen": old.notify_seen})
+    assert again.notify_on == "tweezer_bottom"                                   # 画面で外したものは戻さない

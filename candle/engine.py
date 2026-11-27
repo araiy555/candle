@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from . import fvg, opening, sweep
 from .flow import FlowDetector, FlowParams
 from .market import MarketMonitor
-from .patterns import (FLOW_STRATEGY, FVG_STRATEGIES, OPEN_STRATEGY, STRATEGIES, STRATEGY_BY_ID, SWEEP_STRATEGY,
+from .patterns import (BOS_STRATEGY, FLOW_STRATEGY, FVG_STRATEGIES, OPEN_STRATEGY, STRATEGIES, STRATEGY_BY_ID, SWEEP_STRATEGY,
                        WALL_STRATEGIES, Params, contiguous_tail, decline)
 from .wall import WallTracker
 from .risk import RiskManager
@@ -59,7 +59,7 @@ class PaperEngine:
         wanted = ids | (notify_ids or set())
         # 大口の売り板の観察（約定の向きと出来高の差分が要るので、スクイーズの検出器と一緒に動かす）
         self.walls = WallTracker() if wanted & set(WALL_STRATEGIES.values()) else None
-        self.sweep_on = SWEEP_STRATEGY in wanted
+        self.sweep_on = SWEEP_STRATEGY in wanted or BOS_STRATEGY in wanted
         self.sweep_params = sweep.SweepParams()
         self.sweep_seen: set[tuple[str, str]] = set()      # (銘柄, 押し安値の時刻)。同じプールは1回だけ
         self.last_msg: dict[str, dict] = {}                # 銘柄ごとの最新の配信（記録に板などを残すため）
@@ -273,29 +273,37 @@ class PaperEngine:
                      sig.note, self.vwap(symbol))
 
     def _check_sweep(self, bar: Bar, history) -> None:
-        """足の確定ごとに、流動性スイープ（押し安値を割って反転）を判定して通知・記録する。"""
+        """足の確定ごとに、流動性スイープ（押し安値を割って反転）を判定して通知・記録する。
+
+        上へのブレイク（BOS）の後で、割安ゾーンで起きたものは「BOS後の押し目」として知らせる。
+        どちらも検知履歴には流動性スイープとして残り、場面の印（BOS後・ゾーン・内部/外部）で比べられる。
+        """
         if not self.sweep_on:
             return
         sig = sweep.detect(contiguous_tail(list(history)[-200:]), self.sweep_params)
         if sig is None:
             return
+        sid = BOS_STRATEGY if sig.metrics.get("bos_setup") and self._wants(BOS_STRATEGY) else SWEEP_STRATEGY
         key = (bar.symbol, sig.level_time.isoformat())
-        if key in self.sweep_seen or (SWEEP_STRATEGY, bar.symbol, bar.end.isoformat()) in self.seen:
+        if key in self.sweep_seen or any((x, bar.symbol, bar.end.isoformat()) in self.seen
+                                         for x in (SWEEP_STRATEGY, BOS_STRATEGY)):
             return
         self.sweep_seen.add(key)
-        self.seen.add((SWEEP_STRATEGY, bar.symbol, bar.end.isoformat()))
-        name = STRATEGY_BY_ID[SWEEP_STRATEGY].name
+        self.seen.add((sid, bar.symbol, bar.end.isoformat()))
+        name = STRATEGY_BY_ID[sid].name
         log.info("サイン %s %s %s", name, bar.symbol, sig.note)
         if self.squeeze_log is not None:
             self.squeeze_log.on_signal(sig, self.last_msg.get(bar.symbol, {}), self.names.get(bar.symbol),
                                        kind="sweep")
-        if self.notify and self._wants(SWEEP_STRATEGY):
+        if not self._wants(sid):
+            return                    # 記録だけ残す（通知をオフにしていても、後で比べられるように）
+        if self.notify:
             label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
             self.notify(f"{name}  {label}", f"{bar.end:%H:%M} {sig.note}", bar.symbol)
         if self.auto_chart and self.on_auto_chart:
             self.on_auto_chart(bar.symbol)
-        self._signal(self.mode, SWEEP_STRATEGY, bar.symbol, bar.end, bar.close, sig.low,
-                              "通知のみ", sig.note, self.vwap(bar.symbol))
+        self._signal(self.mode, sid, bar.symbol, bar.end, bar.close, sig.low,
+                     "通知のみ", sig.note, self.vwap(bar.symbol))
 
     def _check_fvg(self, bar: Bar, history) -> None:
         """足の確定ごとに、FVGの反発・割れを判定して通知する（売買はしない）。"""
