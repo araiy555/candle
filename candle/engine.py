@@ -535,14 +535,16 @@ class PaperEngine:
             positions.append(dict(
                 id=t.id, strategy=name(t.strategy_id), symbol=t.symbol, qty=t.qty,
                 state=self.state_label(t), name=self.names.get(t.symbol),
-                signal_time=t.signal_time.isoformat(), entry_price=t.entry_price, price=px,
+                signal_time=t.signal_time.isoformat(), entry_time=t.entry_time.isoformat(),
+                entry_price=t.entry_price, price=px,
                 initial_stop=t.initial_stop, stop=t.stop, vwap=self.vwap(t.symbol),
                 range_pct=self.range_pct(t.symbol),
                 next_raise=t.next_raise(), trail_mode=t.trail_mode, trail_value=t.trail_value,
                 pnl=None if px is None else t.pnl(px),
                 r=None if px is None else t.r_multiple(px),
                 hold_min=(now - t.entry_time).total_seconds() / 60))
-        history = [dict(strategy=name(t.strategy_id), symbol=t.symbol, qty=t.qty,
+        history = [dict(id=t.id, name=self.names.get(t.symbol), initial_stop=t.initial_stop,
+                        strategy=name(t.strategy_id), symbol=t.symbol, qty=t.qty,
                         entry_time=t.entry_time.isoformat(), entry_price=t.entry_price,
                         exit_time=t.exit_time.isoformat(), exit_price=t.exit_price,
                         reason=t.exit_reason, pnl=t.pnl(), r=t.r_multiple(), range_pct=t.range_pct,

@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from datetime import datetime
 import threading
+
+from .bars import JST
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PAGE = r"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
@@ -90,7 +94,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <div style="padding:6px 16px 0;font-size:12px" class="mut"><span style="display:inline-block;width:22px;border-top:2px solid var(--acc);vertical-align:middle;margin-right:5px"></span>VWAP（受信した値。受信前の時間帯は線がありません）</div>
 <div style="padding:4px 16px 0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px" class="mut"><span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--up);vertical-align:middle;margin-right:5px"></span>直近の上昇の範囲（中央の線より上が割高ゾーン、下が割安ゾーン）</span><span><span style="display:inline-block;width:18px;height:8px;background:var(--warn);opacity:.75;vertical-align:middle;margin-right:5px"></span>上昇中の出来高の分布</span><span><span style="display:inline-block;width:18px;border-top:2px dashed var(--fg);vertical-align:middle;margin-right:5px"></span>上昇中のPOC</span><span><span style="display:inline-block;width:18px;height:8px;border:1.5px solid var(--warn);vertical-align:middle;margin-right:5px"></span>FVG</span><span><span style="display:inline-block;width:18px;border-top:2px solid #d4a700;vertical-align:middle;margin-right:5px"></span>上昇前のレンジのPOC</span><span><span style="display:inline-block;width:18px;height:8px;border:1px dashed var(--warn);background:var(--warn);opacity:.4;vertical-align:middle;margin-right:5px"></span>流動性プール（割られていない押し安値。下に損切りがたまりやすい）</span></div>
 <div class="chart"><svg id="svg" role="img"></svg><div class="tip" id="tip"></div></div>
-<div class="note" id="note"></div></dialog>
+<div id="tinfo" style="padding:8px 16px 0;font-size:13px"></div><div class="note" id="note"></div></dialog>
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -104,7 +108,7 @@ function table(el,heads,rows,empty){
   $(el).innerHTML='<table><thead><tr>'+heads.map(h=>`<th>${h}</th>`).join('')+'</tr></thead><tbody>'+
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
-let halted=false,state=null,cur=null,formLoaded=false;const closing=new Set();
+let halted=false,state=null,cur=null,formLoaded=false;let curDay=null,curTrade=null;const dayOf=t=>new Date(t).toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});const closing=new Set();
 const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_price','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth','notify_on'];
 function vdiff(price,vwap){if(price==null||!vwap)return '<span class="mut">-</span>';const d=(price-vwap)/vwap*100;return `<span class="${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${n(d,2)}%</span>`}
 function vcell(price,vwap){return vwap?`${n(vwap,1)} <span style="font-size:12px">(${vdiff(price,vwap)})</span>`:'<span class="mut">-</span>'}
@@ -161,7 +165,7 @@ async function load(){
     d.signals.map(s=>[esc(s.strategy),`<button class="link" data-sym="${esc(s.symbol)}">${esc(s.symbol)} ${esc(s.name||'')}</button> <button data-kabu="${esc(s.symbol)}" style="padding:1px 8px;font-size:12px">kabuステで表示</button>`,md(s.time),n(s.price,1),vdiff(s.price,s.vwap),rng(s.range_pct),s.drop_pct==null?'<span class="mut">-</span>':'-'+n(s.drop_pct,2)+'%',n(s.pattern_low,1),`<span class="l mut" style="white-space:normal;display:inline-block;max-width:420px;text-align:left">${esc(s.note||'')}</span>`,
       s.action==='entry'?'エントリー':s.action==='通知のみ'?'通知':'<span class="mut">見送り: '+esc(s.action)+'</span>']),'まだサインはありません');
   table('history',['戦略','銘柄','株数','買い','買値','決済','売値','理由','損益(円)','R','平均値幅率','損切り幅÷値幅'],
-    d.history.map(t=>[esc(t.strategy),esc(t.symbol),n(t.qty),md(t.entry_time),n(t.entry_price,1),md(t.exit_time),n(t.exit_price,1),
+    d.history.map(t=>[esc(t.strategy),`<button class="link" data-tid="${t.id}" title="チャートで売買の位置を見る">${esc(t.symbol)} ${esc(t.name||'')}</button>`,n(t.qty),md(t.entry_time),n(t.entry_price,1),md(t.exit_time),n(t.exit_price,1),
       esc(t.reason),yen(t.pnl),rr(t.r),rng(t.range_pct),t.range_pct?n(t.stop_pct/t.range_pct,1)+'倍':'<span class="mut">-</span>']),'決済済みの取引はありません');
   $('watch').innerHTML=d.watchlist.map(w=>`<button class="w" data-sym="${esc(w.symbol)}"${w.excluded?' style="opacity:.45" title="株価が下限より安いため対象外"':''}><span>${w.excluded?'<span class="mut">対象外 </span>':''}${esc(w.symbol)} <span class="mut">${esc(w.name||'')}</span></span><span style="text-align:right">${n(w.price,1)}<br><span style="font-size:11px" class="mut">VWAP比 ${vdiff(w.price,w.vwap)}　値幅 ${rng(w.range_pct)}</span></span></button>`).join('')||'<div class="empty">未登録</div>';
 }
@@ -177,9 +181,12 @@ function draw(data){
   const svg=$('svg'),tip=$('tip'),bars=data.bars;svg.innerHTML='';tip.style.display='none';
   const W=svg.clientWidth||900,H=460,L=8,R=64,T=14,VH=84,VG=22,B=26+VH+VG;svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
   if(!bars.length){svg.appendChild(el('text',{x:W/2,y:H/2,'text-anchor':'middle',fill:'var(--mut)','font-size':13},'まだ足がありません（起動後に確定した足から表示します）'));return}
-  const marks=(state?.signals||[]).filter(s=>s.symbol===data.symbol);
+  const bday=dayOf(bars[0].t),marks=(state?.signals||[]).filter(s=>s.symbol===data.symbol&&dayOf(s.time)===bday);
+  // この銘柄のその日の売買（決済済みと保有中）。どこで買ってどこで売ったかを重ねて描く
+  const trs=[...(state?.history||[]),...(state?.positions||[])].filter(t=>t.symbol===data.symbol&&t.entry_time&&dayOf(t.entry_time)===bday);
+  const selT=trs.find(t=>t.id===curTrade);
   const vw=bars.map(b=>b.vwap).filter(v=>v);
-  let lo=Math.min(...bars.map(b=>b.l),...marks.map(m=>m.pattern_low),...vw),hi=Math.max(...bars.map(b=>b.h),...vw);
+  let lo=Math.min(...bars.map(b=>b.l),...marks.map(m=>m.pattern_low),...vw,...(selT?[selT.initial_stop]:[])),hi=Math.max(...bars.map(b=>b.h),...vw);
   const pad=(hi-lo)*0.08||hi*0.002;lo-=pad*1.6;hi+=pad;
   const n0=Math.max(bars.length,30),bw=(W-L-R)/n0,x=i=>L+bw*(i+.5),y=v=>T+(hi-v)/(hi-lo)*(H-T-B);
   const dec=hi<1000?1:0,fmt=v=>v.toLocaleString('ja-JP',{minimumFractionDigits:dec,maximumFractionDigits:dec});
@@ -230,6 +237,17 @@ function draw(data){
     svg.appendChild(el('line',{x1:x(i)-bw,x2:W-R,y1:py,y2:py,stroke:'var(--fg)','stroke-width':1,'stroke-dasharray':'4 3',opacity:.6}));
     svg.appendChild(el('path',{d:`M${x(i)},${py+6} l6,10 h-12 z`,fill:'var(--fg)'}));
     const right=x(i)+140>W-R;svg.appendChild(el('text',{x:x(i)+(right?-10:10),y:py+17,'text-anchor':right?'end':'start',fill:'var(--fg)','font-size':11},`${m.strategy} 安値 ${fmt(m.pattern_low)}`))}
+  const bi=t=>{const v=Date.parse(t);return bars.findIndex(b=>v>=Date.parse(b.t)&&v<Date.parse(b.t)+ms)};
+  const halo={stroke:'var(--card)','stroke-width':4,'paint-order':'stroke'};
+  for(const t of trs){const i=bi(t.entry_time),j=t.exit_time?bi(t.exit_time):-1;if(i<0)continue;const sel=t===selT,done=t.exit_time&&j>=0;
+    const col=done?(t.pnl>0?'var(--up)':'var(--down)'):'var(--acc)',ey=y(t.entry_price);
+    if(sel&&t.initial_stop>lo){const sy=y(t.initial_stop),sx=done?x(j)+bw:W-R;svg.appendChild(el('line',{x1:x(i)-bw/2,x2:sx,y1:sy,y2:sy,stroke:'var(--warn)','stroke-width':1.5,'stroke-dasharray':'5 4'}));
+      const lf=x(i)>190;svg.appendChild(el('text',{x:lf?x(i)-bw/2-5:x(i)-bw/2,y:lf?sy+4:sy+14,'text-anchor':lf?'end':'start',fill:'var(--warn)','font-size':11,...halo},'最初の損切り '+fmt(t.initial_stop)))}
+    if(done)svg.appendChild(el('line',{x1:x(i),x2:x(j),y1:ey,y2:y(t.exit_price),stroke:col,'stroke-width':sel?3.5:2,opacity:sel||!selT?1:.55}));
+    svg.appendChild(el('circle',{cx:x(i),cy:ey,r:sel?6:4.5,fill:'var(--acc)',stroke:'var(--card)','stroke-width':2}));
+    if(sel||!selT)svg.appendChild(el('text',{x:x(i)-8,y:ey-9,'text-anchor':'end',fill:'var(--acc)','font-size':sel?13:11,'font-weight':700,...halo},'買 '+fmt(t.entry_price)));
+    if(done){const xy=y(t.exit_price);svg.appendChild(el('circle',{cx:x(j),cy:xy,r:sel?6:4.5,fill:col,stroke:'var(--card)','stroke-width':2}));
+      const rt=x(j)+150>W-R;svg.appendChild(el('text',{x:x(j)+(rt?-9:9),y:xy+(t.pnl>0?-9:17),'text-anchor':rt?'end':'start',fill:col,'font-size':sel?13:11,'font-weight':700,...halo},(sel?'売 '+fmt(t.exit_price)+'　':'')+(t.pnl>0?'+':'')+n(t.pnl)+'円'))}}
   const cross=el('line',{y1:T,y2:H-26,stroke:'var(--mut)','stroke-width':1,opacity:0});svg.appendChild(cross);
   const hit=el('rect',{x:L,y:T,width:W-L-R,height:H-T-26,fill:'transparent'});svg.appendChild(hit);
   hit.onmousemove=e=>{const r=svg.getBoundingClientRect(),px=(e.clientX-r.left)*W/r.width,i=Math.max(0,Math.min(bars.length-1,Math.floor((px-L)/bw))),b=bars[i];
@@ -238,19 +256,24 @@ function draw(data){
     tip.style.display='block';const tx=x(i)*r.width/W;tip.style.left=(tx>r.width/2?tx-tip.offsetWidth-4:tx+20)+'px';tip.style.top='20px'};
   hit.onmouseleave=()=>{cross.setAttribute('opacity',0);tip.style.display='none'};
 }
-async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?symbol='+encodeURIComponent(cur))).json()}catch(e){return}
+async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?symbol='+encodeURIComponent(cur)+(curDay?'&day='+curDay:''))).json()}catch(e){return}
   if(d.symbol!==cur)return;$('dt').textContent=`${d.symbol} ${d.name||''}`;
   const q=d.quote||{},m=v=>v==null?'<span class="mut">-</span>':null;
   $('qinfo').innerHTML=[['現在値',m(q.CurrentPrice)||n(q.CurrentPrice,1)+'円'],['前日比',m(q.ChangePreviousClose)||`<span class="${q.ChangePreviousClose>0?'pos':q.ChangePreviousClose<0?'neg':''}">${q.ChangePreviousClose>0?'+':''}${n(q.ChangePreviousClose,1)}円（${q.ChangePreviousClosePer>0?'+':''}${n(q.ChangePreviousClosePer,2)}%）</span>`],
     ['VWAP',m(q.VWAP)||n(q.VWAP,1)+'円'],['VWAPとの差',vdiff(q.CurrentPrice,q.VWAP)],['始値',m(q.OpeningPrice)||n(q.OpeningPrice,1)],['高値',m(q.HighPrice)||n(q.HighPrice,1)],['安値',m(q.LowPrice)||n(q.LowPrice,1)],
     ['足の平均値幅率',rng(d.range_pct)],['当日の値幅率',rng(d.day_range_pct)],['出来高',m(q.TradingVolume)||n(q.TradingVolume)+'株'],['売買代金',m(q.TradingValue)||n(q.TradingValue/1e8,1)+'億円']].map(([k,v])=>`<div><span>${k}</span><b style="font-size:15px">${v}</b></div>`).join('');
   $('note').textContent=`${d.minutes||''}分足・当日分（このプログラムが起動中に受信した足）。赤=陽線、緑=陰線、薄い足=データ欠落を含む足。▲と点線はサインとパターン安値。下の棒は1本ごとの出来高。足の平均値幅率は、直近30本の（高値−安値）÷終値の平均。`;
+  const tt=(state?.history||[]).find(t=>t.id===curTrade),hmm=s=>new Date(s).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'});
+  $('tinfo').innerHTML=tt?`<b>この取引</b>　${md(tt.entry_time)} 買 ${n(tt.entry_price,1)} → ${hmm(tt.exit_time)} 売 ${n(tt.exit_price,1)}　${yen(tt.pnl)}　<span class="mut">${esc(tt.reason||'')}／最初の損切り ${n(tt.initial_stop,1)}／${n(tt.qty)}株</span>`+(d.bars.length?'':'　<span class="warn">この日の足が保存されていません</span>'):'';
+  if(d.day)$('note').textContent=`${d.minutes||''}分足・${d.day} の保存済みの足。青い丸が買い、赤（利益）または緑（損失）の丸が売りで、線でつないでいます。`;
+  else $('note').textContent+=' 青い丸が買い、赤（利益）・緑（損失）の丸が売り。';
   if(!$('tip').style.display||$('tip').style.display==='none')draw(d)}
-function openChart(sym){cur=sym;$('l1').href=`https://finance.yahoo.co.jp/quote/${sym}.T/chart`;$('l2').href=`https://jp.tradingview.com/chart/?symbol=TSE%3A${sym}`;
+function openChart(sym,trade){cur=sym;curTrade=trade?trade.id:null;curDay=trade?dayOf(trade.entry_time):null;$('tinfo').innerHTML='';$('l1').href=`https://finance.yahoo.co.jp/quote/${sym}.T/chart`;$('l2').href=`https://jp.tradingview.com/chart/?symbol=TSE%3A${sym}`;
   $('l3').href=`https://kabutan.jp/stock/chart?code=${sym}`;$('copy').textContent='銘柄コードをコピー';$('kmsg').textContent='';$('svg').innerHTML='';$('dt').textContent=sym;$('dlg').showModal();chart()}
 document.addEventListener('click',async e=>{const c=e.target.closest('[data-close]');if(c){if(!confirm(c.dataset.label+' を成行で決済します。よろしいですか？'))return;
   const id=Number(c.dataset.close);closing.add(id);await fetch('/api/close?id='+id,{method:'POST'});load();return}
   const k=e.target.closest('[data-kabu]');if(k){const r=await kabu(k.dataset.kabu);if(r&&!r.ok)alert(r.message);return}
+  const tr=e.target.closest("[data-tid]");if(tr){const t=(state?.history||[]).find(t=>String(t.id)===tr.dataset.tid);if(t)openChart(t.symbol,t);return}
   const b=e.target.closest('[data-sym]');if(b)openChart(b.dataset.sym)});
 async function kabu(sym,msgEl){if(msgEl)msgEl.textContent='切り替え中…';try{const r=await (await fetch('/api/kabu-chart?symbol='+encodeURIComponent(sym),{method:'POST'})).json();
   if(msgEl)msgEl.textContent=r.ok?'':r.message;return r}catch(e){if(msgEl)msgEl.textContent='失敗しました'}}
@@ -269,6 +292,28 @@ $('dlg').addEventListener('click',e=>{if(e.target===$('dlg'))$('dlg').close()});
 $('copy').onclick=async()=>{try{await navigator.clipboard.writeText(cur);$('copy').textContent='コピーしました'}catch(e){$('copy').textContent='コピーできませんでした'}};
 load();setInterval(load,2000);setInterval(chart,5000);
 </script></body></html>"""
+
+
+def past_chart(db_path, symbol: str, day: str, name: str | None = None) -> dict | None:
+    """過去の日のチャート用の足を、保存済みのデータから読む（読み取り専用。取引の振り返り用）。"""
+    if not db_path:
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = conn.execute(
+                "SELECT minutes, start, open, high, low, close, volume, complete, vwap FROM bars "
+                "WHERE symbol=? AND substr(start,1,10)=? AND minutes=(SELECT MIN(minutes) FROM bars "
+                "WHERE symbol=? AND substr(start,1,10)=?) ORDER BY start", (symbol, day, symbol, day)).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    if not rows:
+        return None
+    return dict(symbol=symbol, name=name, minutes=rows[0][0], quote=None, range_pct=None, day_range_pct=None,
+                structure=None, pools=[], day=day,
+                bars=[dict(t=r[1], o=r[2], h=r[3], l=r[4], c=r[5], v=r[6], ok=bool(r[7]), vwap=r[8]) for r in rows])
 
 
 def start_web(target, port: int = 8765, data_dir=None, db_path=None) -> ThreadingHTTPServer:
@@ -294,10 +339,15 @@ def start_web(target, port: int = 8765, data_dir=None, db_path=None) -> Threadin
             if self.path == "/":
                 self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
             elif self.path.startswith("/api/bars?symbol="):
-                symbol = self.path.split("=", 1)[1][:10]
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                symbol, day = q.get("symbol", [""])[0][:10], q.get("day", [""])[0][:10]
                 if not symbol.isalnum():
                     return self._send(b"bad symbol", "text/plain", 400)
-                self._send(json.dumps(cur().chart_data(symbol), ensure_ascii=False).encode("utf-8"),
+                data = None
+                if day and day != datetime.now(JST).strftime("%Y-%m-%d"):
+                    data = past_chart(db_path, symbol, day, cur().names.get(symbol))   # 過去の日は保存した足から
+                self._send(json.dumps(data or cur().chart_data(symbol), ensure_ascii=False).encode("utf-8"),
                            "application/json")
             elif self.path.split("?")[0] == "/squeeze":
                 from . import squeeze_web
