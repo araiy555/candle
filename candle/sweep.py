@@ -1,4 +1,4 @@
-"""流動性スイープの検出。
+"""流動性タッチの検出（下の流動性にタッチ→上へ、上の流動性にタッチ→下へ）。
 
 買った人たちの損切り注文は、直近の目立つ安値の少し下にたまりやすい（流動性プール）。
 株価がその安値を割ると損切りの売りが一斉に出て、大口の買い手はその売りを相手に買う。
@@ -101,25 +101,30 @@ def liquidity_levels(bars: Sequence[Bar], p: SweepParams | None = None, major: i
     return out
 
 
-def targets(bars: Sequence[Bar], price: float, p: SweepParams | None = None) -> dict:
-    """下の流動性を割って戻した後に、向かう先。上にある流動性を、近い順に並べる。
+def targets(bars: Sequence[Bar], price: float, p: SweepParams | None = None, side: str = "low") -> dict:
+    """流動性にタッチした後に、向かう先（反対側の流動性）を近い順に並べる。
 
-      target    : 次の目標 ＝ 上の外部流動性（反対側のオーダーブロック）のうち、いちばん近いもの
+    side='low'（下の流動性にタッチ）なら上を、side='high'（上の流動性にタッチ）なら下を見る。
+      target    : 次のオーダーブロック ＝ 反対側の外部流動性のうち、いちばん近いもの
       waypoints : 途中にある内部流動性（目標より手前にあるもの。近い順）
     """
-    above = sorted((x for x in liquidity_levels(bars, p, max_internal=99)
-                    if x["side"] == "high" and x["level"] > price), key=lambda x: x["level"])
-    ext = next((x for x in above if x["kind"] == "external"), None)
-    way = [x["level"] for x in above if x["kind"] == "internal" and (ext is None or x["level"] < ext["level"])]
-    return dict(target=ext["level"] if ext else None,
+    want, sign = ("high", 1) if side == "low" else ("low", -1)
+    ahead = sorted((x for x in liquidity_levels(bars, p, max_internal=99)
+                    if x["side"] == want and (x["level"] - price) * sign > 0),
+                   key=lambda x: abs(x["level"] - price))
+    ext = next((x for x in ahead if x["kind"] == "external"), None)
+    way = [x["level"] for x in ahead if x["kind"] == "internal"
+           and (ext is None or abs(x["level"] - price) < abs(ext["level"] - price))]
+    return dict(target=ext["level"] if ext else None, target_side=want,
                 target_pct=(ext["level"] / price - 1) * 100 if ext else None, waypoints=way[:3])
 
 
 def target_text(t: dict) -> str:
+    where = "下" if t.get("target_side") == "low" else "上"
     if t.get("target") is None:
-        return "次の目標：上の外部流動性は、まだ見つかっていません"
+        return f"次のオーダーブロック：{where}の外部流動性は、まだ見つかっていません"
     way = "／途中の内部流動性 " + "・".join(f"{v:,.1f}" for v in t["waypoints"]) if t.get("waypoints") else ""
-    return f"次の目標：上の外部流動性 {t['target']:,.1f}（+{t['target_pct']:.2f}%）{way}"
+    return f"次のオーダーブロック：{where}の外部流動性 {t['target']:,.1f}（{t['target_pct']:+.2f}%）{way}"
 
 
 def find_bos(bars: Sequence[Bar], upto: int, p: SweepParams) -> dict | None:
@@ -191,8 +196,8 @@ def context_conditions(c: dict) -> list:
     ]
 
 
-def detect(bars: Sequence[Bar], p: SweepParams | None = None) -> SweepSignal | None:
-    """最後の足が確定した時点で、流動性スイープが起きたかを判定する。"""
+def _detect_low(bars: Sequence[Bar], p: SweepParams | None = None) -> SweepSignal | None:
+    """下の流動性にタッチ：安値を割って、すぐ安値の上に戻したか。"""
     p = p or SweepParams()
     n = len(bars)
     if n < p.vol_avg + p.pivot * 2 + p.min_age:
@@ -237,10 +242,78 @@ def detect(bars: Sequence[Bar], p: SweepParams | None = None) -> SweepSignal | N
         ctx = context(bars, s, i, level, low, p)
         metrics.update(ctx)
         metrics.update(targets(bars, cur.close, p))
-        kind = f"外部流動性（{ctx['ext_kind']}）" if ctx["liquidity"] == "external" else "内部流動性"
-        note = f"{kind} {level:,.1f} を {low:,.1f} まで割って {cur.close:,.1f} に回復。出来高 平均の{ratio:.1f}倍　→ " \
-            + target_text(metrics)
+        kind = f"下の外部流動性（{ctx['ext_kind']}）" if ctx["liquidity"] == "external" else "下の内部流動性"
+        metrics["side"] = "low"
+        note = (f"{kind} {level:,.1f} にタッチ（{low:,.1f} まで）して {cur.close:,.1f} に回復。"
+                f"出来高 平均の{ratio:.1f}倍　→ " + target_text(metrics))
         conditions += context_conditions(ctx)
         return SweepSignal(cur.symbol, cur.end, cur.close, level, bars[i].start, low, note,
                            conditions, metrics)
     return None
+
+
+def _detect_high(bars: Sequence[Bar], p: SweepParams) -> SweepSignal | None:
+    """上の流動性にタッチ：高値を上に抜いて、すぐ高値の下に戻したか（下の流動性へ向かう合図）。"""
+    n = len(bars)
+    if n < p.vol_avg + p.pivot * 2 + p.min_age:
+        return None
+    cur = bars[-1]
+    for back in range(0, p.reclaim_bars):
+        s = n - 1 - back
+        tops = []
+        for i in range(max(p.pivot, s - p.lookback), s - p.pivot):
+            lv = bars[i].high
+            if any(bars[j].high > lv for j in range(i - p.pivot, i + p.pivot + 1) if j != i):
+                continue
+            if any(bars[j].high > lv for j in range(i + 1, s)):
+                continue                              # すでに抜かれた
+            if s - i >= p.min_age and bars[s].high > lv:
+                tops.append((i, lv))
+        if not tops:
+            continue
+        i, level = min(tops, key=lambda x: x[1])      # 抜かれた中で一番下の高値
+        high = max(b.high for b in bars[s:])
+        if cur.close >= level or (high - level) / level > p.max_depth:
+            continue
+        if back and bars[s].close < level:
+            continue                                  # 直前の足ですでに戻していた（そのとき判定済み）
+        prev = bars[max(0, s - p.vol_avg):s]
+        avg = sum(b.volume for b in prev) / len(prev) if prev else 0.0
+        vol = max(b.volume for b in bars[s:])
+        ratio = vol / avg if avg > 0 else 0.0
+        if ratio < p.vol_mult:
+            continue
+        depth = (high - level) / level * 100
+        day_high = max(b.high for b in bars[:s])
+        big = i >= p.major and not any(bars[j].high > level
+                                       for j in range(i - p.major, min(s, i + p.major + 1)) if j != i)
+        ext = "当日高値" if level >= day_high else "大きな波の高値" if big else None
+        metrics = dict(side="high", level=level, level_time=bars[i].start.isoformat(), sweep_low=high,
+                       depth_pct=depth, volume_ratio=ratio, sweep_volume=vol, avg_volume=avg,
+                       bars_since_pool=s - i, reclaim_bars=back + 1, after_bos=False, zone=None, bos_setup=False,
+                       liquidity="external" if ext else "internal", ext_kind=ext)
+        metrics.update(targets(bars, cur.close, p, side="high"))
+        kind = f"上の外部流動性（{ext}）" if ext else "上の内部流動性"
+        note = (f"{kind} {level:,.1f} にタッチ（{high:,.1f} まで）して {cur.close:,.1f} に反落。"
+                f"出来高 平均の{ratio:.1f}倍　→ " + target_text(metrics))
+        conditions = [
+            dict(key="pool", label="上の流動性", ok=True,
+                 text=f"{bars[i].start:%H:%M} の高値 {level:,.1f}円。それ以降 {s - i}本、抜かれていなかった。"
+                      "この少し上に、売った人たちの損切り注文がたまりやすい。"),
+            dict(key="sweep", label="タッチと反落", ok=True,
+                 text=f"{bars[s].start:%H:%M} の足で {high:,.1f}円まで上げ（{depth:.2f}%）、"
+                      f"{'同じ足' if back == 0 else '次の足'}の終値 {cur.close:,.1f}円で高値の下に戻した。"),
+            dict(key="volume", label="出来高の増加", ok=True,
+                 text=f"タッチした足の出来高 {vol:,.0f}株は、直前{len(prev)}本の平均 {avg:,.0f}株の {ratio:.1f}倍"
+                      f"（基準 {p.vol_mult:g}倍以上）。"),
+            dict(key="liquidity", label="外部流動性", ok=bool(ext),
+                 text=f"{ext}にタッチした（外部流動性）。" if ext else "大きな波の内側の、小さな波の高値にタッチした（内部流動性）。"),
+        ]
+        return SweepSignal(cur.symbol, cur.end, cur.close, level, bars[i].start, high, note, conditions, metrics)
+    return None
+
+
+def detect(bars: Sequence[Bar], p: SweepParams | None = None) -> SweepSignal | None:
+    """最後の足が確定した時点で、流動性へのタッチが起きたかを判定する（下へのタッチを先に見る）。"""
+    p = p or SweepParams()
+    return _detect_low(bars, p) or _detect_high(bars, p)

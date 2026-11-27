@@ -205,7 +205,7 @@ STRATEGIES: tuple[Strategy, ...] = (
     Strategy("wall_break", "売り板突破", lambda bars, p: None),
     Strategy("wall_approach", "売り板接近", lambda bars, p: None),
     # 流動性スイープ（sweep.py が判定する）。通知のみ。
-    Strategy("liq_sweep", "流動性ブレイク", lambda bars, p: None),
+    Strategy("liq_sweep", "流動性タッチ", lambda bars, p: None),
     # 寄り付き後の押し目買い（opening.py が判定する）。通知のみ。
     Strategy("open_dip", "寄り付き押し目", lambda bars, p: None),
     # 以前は場面ごとに通知を分けていた（今は流動性ブレイクに一本化。過去の記録の表示用に名前だけ残す）

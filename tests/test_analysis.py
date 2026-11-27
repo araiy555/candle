@@ -83,8 +83,9 @@ def test_analyze_signals_compares_kinds_in_expected_direction(tmp_path):
     br = k["FVG割れ（下がれば見込みどおり）"]
     assert round(br["h300"]["avg"], 2) == 0.4 and br["sim"]["avg"] == 0.3 and round(br["max_fav"], 2) == 0.4
     assert k["FVG反発"]["n"] == 1 and k["FVG反発"]["sim"]["n"] == 0          # 追跡が途切れたものは試算しない
-    assert k["流動性ブレイク（すべて）"]["n"] == 1 and k["　└ 内部流動性のうち、高値ブレイク後＋割安ゾーン"]["n"] == 1
-    assert k["　└ 内部流動性"]["n"] == 1 and k["　└ 外部流動性（当日安値・大きな波の安値・前日安値）"]["n"] == 0 and k["　└ 高値ブレイクなし"]["n"] == 0
+    assert k["流動性タッチ：下にタッチ→上へ"]["n"] == 1 and k["　└ 内部流動性のうち、高値ブレイク後＋割安ゾーン"]["n"] == 1
+    assert k["　└ 内部流動性"]["n"] == 1 and k["　└ 外部流動性（当日安値・大きな波の安値・前日安値）"]["n"] == 0
+    assert k["流動性タッチ：上にタッチ→下へ（下がれば見込みどおり）"]["n"] == 0
     assert res["days"] == ["2026-11-27", "2026-11-26", "2026-11-25"]
     assert analysis.analyze_signals(db, "2026-11-26", "2026-11-26")["kinds"][0]["n"] == 1
     assert analysis._verdict(40, 0.05, 0.04) == "見込みあり" and analysis._verdict(40, -0.05, -0.02) == "見込み薄"

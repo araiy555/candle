@@ -308,8 +308,8 @@ class PaperEngine:
     def _check_sweep(self, bar: Bar, history) -> None:
         """足の確定ごとに、流動性スイープ（押し安値を割って反転）を判定して通知・記録する。
 
-        外部流動性でも内部流動性でも、同じ「流動性ブレイク」として知らせ、どの流動性を割ったかと、
-        次の目標（上の外部流動性）・途中の内部流動性を文面に入れる。場面の印は記録に残し、分析で比べる。
+        下の流動性にタッチ（→上へ）、上の流動性にタッチ（→下へ）のどちらも「流動性タッチ」として知らせ、
+        どの流動性にタッチしたか、次のオーダーブロック（反対側の外部流動性）、途中の内部流動性を文面に入れる。
         """
         if not self.sweep_on:
             return
@@ -317,19 +317,24 @@ class PaperEngine:
         if sig is None:
             return
         m, prev = sig.metrics, self.prev_days.get(bar.symbol)
-        if prev and prev.get("low") and sig.low < prev["low"] <= bar.close:
-            # 前日安値も割って戻した（上位足の外部流動性）
-            m.update(liquidity="external", ext_kind="前日安値", bos_setup=False, prev_low=prev["low"])
-            sig.note = f"前日安値 {prev['low']:,.1f} も割って回復。" + sig.note
-        if prev and prev.get("high") and prev["high"] > bar.close and (m.get("target") is None
-                                                                      or prev["high"] < m["target"]):
-            # 前日高値のほうが近ければ、そちらを次の目標にする（上位足の外部流動性）
-            old_target = sweep.target_text(m)
-            m.update(target=prev["high"], target_pct=(prev["high"] / bar.close - 1) * 100,
-                     waypoints=[v for v in m.get("waypoints", []) if v < prev["high"]], target_kind="前日高値")
-            sig.note = sig.note.replace(old_target, sweep.target_text(m) + "（前日高値）")
+        up = m.get("side") == "high"                  # 上の流動性にタッチ（下へ向かう合図）
+        if prev:
+            # 前日の高値・安値は、上位足の外部流動性として扱う
+            touched = prev.get("high") if up else prev.get("low")
+            if touched and ((bar.close <= touched < sig.low) if up else (sig.low < touched <= bar.close)):
+                label = "前日高値" if up else "前日安値"
+                m.update(liquidity="external", ext_kind=label, bos_setup=False, prev_level=touched)
+                sig.note = f"{label} {touched:,.1f} にもタッチ。" + sig.note
+            goal = prev.get("low") if up else prev.get("high")
+            nearer = goal and ((goal < bar.close) if up else (goal > bar.close)) and (
+                m.get("target") is None or abs(goal - bar.close) < abs(m["target"] - bar.close))
+            if nearer:                                # 前日の高値・安値のほうが近ければ、それを次の目標にする
+                old_target = sweep.target_text(m)
+                m.update(target=goal, target_pct=(goal / bar.close - 1) * 100, target_kind="前日安値" if up else "前日高値",
+                         waypoints=[v for v in m.get("waypoints", []) if abs(v - bar.close) < abs(goal - bar.close)])
+                sig.note = sig.note.replace(old_target, sweep.target_text(m) + f"（{m['target_kind']}）")
         sid = SWEEP_STRATEGY
-        key = (bar.symbol, sig.level_time.isoformat())
+        key = (bar.symbol, sig.level_time.isoformat() + (":high" if up else ""))
         if key in self.sweep_seen or any((x, bar.symbol, bar.end.isoformat()) in self.seen
                                          for x in (SWEEP_STRATEGY, BOS_STRATEGY, EXT_STRATEGY)):
             return

@@ -135,17 +135,20 @@ def analyze(db_path, mode: str = "paper", date_from: str | None = None, date_to:
 
 # 通知の種類（検知履歴の kind と、その中の結果）→ (表示名, 見込む方向)。方向 -1 は「下がれば見込みどおり」
 SWEEP_TAG = lambda **want: (lambda m: all(m.get(k) == v for k, v in want.items()))
+# 下へのタッチ（側の記録が無い以前の検知も、こちらに数える）
+LOW = lambda **want: (lambda m: m.get("side", "low") == "low" and all(m.get(k) == v for k, v in want.items()))
 # (検知履歴の kind, 絞り込み, 表示名, 見込む方向)
 SIGNAL_KINDS = [
     ("squeeze", None, "スクイーズ", 1),
-    ("sweep", None, "流動性ブレイク（すべて）", 1),
-    ("sweep", SWEEP_TAG(bos_setup=True), "　└ 内部流動性のうち、高値ブレイク後＋割安ゾーン", 1),
-    ("sweep", SWEEP_TAG(after_bos=True), "　└ 高値ブレイクの後", 1),
-    ("sweep", SWEEP_TAG(after_bos=False), "　└ 高値ブレイクなし", 1),
-    ("sweep", SWEEP_TAG(zone="discount"), "　└ 割安ゾーン", 1),
-    ("sweep", SWEEP_TAG(zone="premium"), "　└ 割高ゾーン", 1),
-    ("sweep", SWEEP_TAG(liquidity="internal"), "　└ 内部流動性", 1),
-    ("sweep", SWEEP_TAG(liquidity="external"), "　└ 外部流動性（当日安値・大きな波の安値・前日安値）", 1),
+    ("sweep", LOW(), "流動性タッチ：下にタッチ→上へ", 1),
+    ("sweep", LOW(liquidity="external"), "　└ 外部流動性（当日安値・大きな波の安値・前日安値）", 1),
+    ("sweep", LOW(liquidity="internal"), "　└ 内部流動性", 1),
+    ("sweep", LOW(zone="discount"), "　└ 割安ゾーン", 1),
+    ("sweep", LOW(zone="premium"), "　└ 割高ゾーン", 1),
+    ("sweep", LOW(bos_setup=True), "　└ 内部流動性のうち、高値ブレイク後＋割安ゾーン", 1),
+    ("sweep", SWEEP_TAG(side="high"), "流動性タッチ：上にタッチ→下へ（下がれば見込みどおり）", -1),
+    ("sweep", SWEEP_TAG(side="high", liquidity="external"), "　└ 外部流動性（当日高値・大きな波の高値・前日高値）", -1),
+    ("sweep", SWEEP_TAG(side="high", liquidity="internal"), "　└ 内部流動性 ", -1),
     ("open", None, "寄り付き押し目", 1),
     ("fvg", SWEEP_TAG(outcome="hold"), "FVG反発", 1),
     ("fvg", SWEEP_TAG(outcome="break"), "FVG割れ（下がれば見込みどおり）", -1),
@@ -256,7 +259,7 @@ def analyze_signals(db_path, date_from: str | None = None, date_to: str | None =
         item = dict(label=label, n=len(rows), h60=col["60"], h180=col["180"], h300=col["300"],
                     max_fav=sum(fav) / len(fav) if fav else None, max_adv=sum(adv) / len(adv) if adv else None,
                     sim=sim, verdict=_verdict(len(sims), sim["avg"], col["300"]["avg"]),
-                    hours=[] if pick is not None and kind == "sweep" else
+                    hours=[] if label.startswith("　") else
                     [dict(hour=h, n=len(v), avg=sum(v) / len(v)) for h, v in sorted(hours.items())])
         if kind == "open":      # 寄り付き押し目は、目標（+7ティック）と損切りのどちらに先に届いたかも出す
             oc = [r["m"].get("outcome") for r in rows]
@@ -303,7 +306,7 @@ async function loadSignals(day){
   if(!daysLoaded){$('day').innerHTML='<option value="all">すべての日</option>'+(d.days||[]).map(x=>`<option>${x}</option>`).join('');daysLoaded=true}
   $('msg').textContent=d.error||'';
   const V={'見込みあり':'pos','見込み薄':'neg'};
-  $('signote').innerHTML=`騰落率は検知したときの株価からの変化で、<b>見込む方向にそろえています</b>（FVG割れは下がればプラス）。「試算」は、検知の株価で入り、+${d.take}% か −${d.cut}% のどちらかに先に届いたら手じまい、届かなければ5分後に手じまう場合の1回あたりの平均です。手数料・すべり・実際にその値段で買えたかは含みません。判定は、試算できた件数が${d.min_n}件以上のときだけ出す目安です。流動性ブレイクの「└」の行は、場面ごとの内訳です（場面の記録を始める前の検知は、内訳には入りません）。`+(d.skipped?`<br>昼休み（11:30〜12:30）と引け前（15:25以降）に出ていた検知 ${d.skipped}件は、売買が成立しない時間の気配によるものなので、集計から除いています。`:'');
+  $('signote').innerHTML=`騰落率は検知したときの株価からの変化で、<b>見込む方向にそろえています</b>（FVG割れは下がればプラス）。「試算」は、検知の株価で入り、+${d.take}% か −${d.cut}% のどちらかに先に届いたら手じまい、届かなければ5分後に手じまう場合の1回あたりの平均です。手数料・すべり・実際にその値段で買えたかは含みません。判定は、試算できた件数が${d.min_n}件以上のときだけ出す目安です。流動性タッチの「└」の行は、場面ごとの内訳です（場面の記録を始める前の検知は、内訳には入りません）。`+(d.skipped?`<br>昼休み（11:30〜12:30）と引け前（15:25以降）に出ていた検知 ${d.skipped}件は、売買が成立しない時間の気配によるものなので、集計から除いています。`:'');
   $('sigs').innerHTML='<table><thead><tr><th>種類</th><th>件数</th><th>1分後</th><th>3分後</th><th>5分後</th><th>5分後に上／下</th><th>最大の伸び</th><th>最大の逆行</th><th>試算：1回あたり</th><th>利確／損切り</th><th>判定（目安）</th></tr></thead><tbody>'+
     d.kinds.map(k=>k.n?`<tr${k.sim.n<d.min_n?' class="few"':''}><td>${esc(k.label)}${k.open?`<br><span class="mut" style="font-size:12px">目標に到達 ${k.open.target}／損切り ${k.open.stop}／届かず ${k.open.timeout}</span>`:''}</td><td>${k.n}</td><td>${pc(k.h60.avg)}</td><td>${pc(k.h180.avg)}</td><td>${pc(k.h300.avg)}</td><td>${sh(k.h300.win)}／${sh(k.h300.lose)}</td><td>${pc(k.max_fav)}</td><td>${pc(k.max_adv)}</td><td><b>${pc(k.sim.avg)}</b> <span class="mut">(${k.sim.n})</span></td><td>${sh(k.sim.take)}／${sh(k.sim.cut)}</td><td class="${V[k.verdict]||'mut'}">${esc(k.verdict)}</td></tr>`
       :`<tr class="few"><td>${esc(k.label)}</td><td>0</td><td colspan="8" style="text-align:left" class="mut">まだ記録がありません</td><td class="mut">データ不足</td></tr>`).join('')+'</tbody></table>';
