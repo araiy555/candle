@@ -4,8 +4,10 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import queue
 import threading
 import time
 from datetime import datetime, time as dtime
@@ -37,6 +39,8 @@ class App:
         self.wallet: tuple[float | None, str] = (None, "未取得")   # (信用新規可能額, 状況)
         self._wallet_at: datetime | None = None
         self._wallet_wait = 60.0      # 次に余力を取りに行くまでの秒数
+        self._hist_queue: queue.Queue = queue.Queue()   # 取り込んだ過去データ（別スレッド → 受信スレッド）
+        self._hist_started = False
 
     # --- 受信側（collector）から呼ばれる ---------------------------------------
     def setup(self, store) -> None:
@@ -59,6 +63,7 @@ class App:
             log.info("モードを切り替えました: %s", MODES[self.mode])
         self.want = None
         self._refresh_wallet(now)
+        self._apply_history()
         self.engine.buying_power, self.engine.buying_power_note = self.wallet
         self.engine.on_clock(now)
 
@@ -71,6 +76,63 @@ class App:
     def set_universe(self, symbols: list[str], names: dict[str, str], minutes: int) -> None:
         self.engine.watchlist, self.engine.names = symbols, names
         self.engine.load_history(symbols, minutes)
+        self.fetch_history(symbols)
+
+    # --- 過去データ（1時間足・日足）の取り込み ---------------------------------
+    def fetch_history(self, symbols: list[str], fetcher=None, pause: float = 0.6) -> None:
+        """上位足の流動性を見るために、過去の1時間足と日足を1日1回だけ取り込む（別スレッド）。
+
+        kabuステーションAPIには過去の足を取る手段が無いので、公開されている株価データを使う。
+        取れなくても動作には影響しない（自分で受信した分だけで表示する）。
+        """
+        if self._hist_started or not self.cfg.fetch_history:
+            return
+        if fetcher is None and os.environ.get("CANDLE_NO_HISTORY"):
+            return                                  # テスト中は外へ取りに行かない
+        self._hist_started = True
+        mark = self.cfg.data_dir / "history_fetched.json"
+        try:
+            done = json.loads(mark.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            done = {}
+        today = datetime.now().strftime("%Y-%m-%d")
+        todo = [s for s in symbols if done.get(s) != today and s.isdigit()]
+
+        def work():
+            from .yahoo import fetch_history as default
+            get, failed = fetcher or default, 0
+            for sym in todo:
+                try:
+                    self._hist_queue.put((sym, get(sym, 60), get(sym, 1440)))
+                    done[sym] = today
+                    failed = 0
+                except Exception as e:            # 取れない銘柄・通信できない場合は飛ばす
+                    failed += 1
+                    log.info("過去データを取れませんでした %s: %s", sym, e)
+                    if failed >= 5:
+                        self.report("history", "過去の株価データを取り込めませんでした"
+                                               "（上位足の流動性は、受信した分だけで表示します）")
+                        break
+                time.sleep(pause)
+            try:
+                mark.parent.mkdir(parents=True, exist_ok=True)
+                mark.write_text(json.dumps(done), encoding="utf-8")
+            except OSError:
+                pass
+
+        if todo:
+            threading.Thread(target=work, daemon=True).start()
+
+    def _apply_history(self) -> None:
+        """取り込んだ過去データを保存して、表示に反映する（データベースは受信スレッドからだけ触る）。"""
+        for _ in range(5):
+            try:
+                sym, hourly, daily = self._hist_queue.get_nowait()
+            except queue.Empty:
+                return
+            self.store.save_bars(hourly, source="history", replace=False)
+            self.store.save_bars(daily, source="history", replace=False)
+            self.engine.rebuild_history(sym)
 
     def login_failed(self) -> None:
         # 起動時に確認済みのパスワードなので消さない（消すと再接続できなくなる）。画面に知らせて再試行する。
@@ -175,6 +237,8 @@ class App:
         engine.auto_chart = flag.exists() and flag.read_text().strip() == "1"
         if old is not None:   # 受信済みの足や価格は引き継ぐ（切り替えで判定を途切れさせない）
             engine.history, engine.prices = old.history, old.prices
+            for name in ("prev_days", "hourly_past", "last_day", "daily", "_own_past", "_history_ref"):
+                setattr(engine, name, getattr(old, name))     # 過去の足・上位足の流動性も引き継ぐ
             engine.watchlist, engine.names = old.watchlist, old.names
             engine.quotes = old.quotes
             engine.buying_power, engine.buying_power_note = self.wallet

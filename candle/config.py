@@ -25,6 +25,7 @@ class Config:
     exit_after: str = "15:20"
     disabled_strategies: list[str] = field(default_factory=list)
     web_port: int = 8765
+    fetch_history: bool = True     # 過去の1時間足・日足を、公開データから1日1回取り込む（上位足の流動性用）
     watch_strategies: list[str] = field(default_factory=lambda: ["tweezer_bottom", "squeeze", "fvg_hold", "fvg_break", "wall_break", "liq_sweep", "open_dip"])
     notify_desktop: bool = True
     notify_sound: bool = True
@@ -87,6 +88,7 @@ def load_config(path: str | Path | None = None) -> Config:
         notify_sound=bool(raw.get("notify", {}).get("sound", True)),
         webhook_url=str(raw.get("notify", {}).get("webhook_url", "")),
         notify_copy_code=bool(raw.get("notify", {}).get("copy_code", True)),
+        fetch_history=bool(raw.get("data", {}).get("fetch_history", True)),
         live=LiveConfig(**raw.get("live", {})),
         market_future=str(raw.get("market", {}).get("future", "NK225")),
         market_future_exchange=int(raw.get("market", {}).get("future_exchange", 2)),

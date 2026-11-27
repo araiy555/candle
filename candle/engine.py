@@ -67,6 +67,9 @@ class PaperEngine:
         self.opening = opening.OpenTracker() if OPEN_STRATEGY in wanted else None
         self.prev_days: dict[str, dict] = {}
         self.hourly_past: dict[str, list[Bar]] = {}
+        self.daily: dict[str, list[Bar]] = {}        # 過去の日足（取り込んだ過去データ。遠い高値・安値を見る）
+        self._own_past: dict[str, list[Bar]] = {}
+        self._history_ref: dict[str, str] = {}
         self.last_day: dict[str, list[Bar]] = {}     # 当日の足が無いときに表示する、直近の営業日の足
         self._hourly_ext: dict[str, tuple] = {}
         self._frames: dict[str, tuple] = {}
@@ -130,11 +133,27 @@ class PaperEngine:
                 self.last_day[sym] = [b for b in past if b.start.date() == last]
                 past = [b for b in past if b.start.date() != last]
                 ref = last.isoformat()
-            if past:
-                self.hourly_past[sym] = mtf.aggregate(past, 60)   # 過去の日の1時間足（数日分の流れを見る）
+            self._own_past[sym] = mtf.aggregate(past, 60) if past else []   # 自分で受信した分の1時間足
+            self._history_ref[sym] = ref
+            self.rebuild_history(sym)
             prev = self.store.prev_day(sym, minutes, ref)
             if prev:
                 self.prev_days[sym] = prev     # 前日の高値・安値（上位足の流動性として表示する）
+
+    def rebuild_history(self, symbol: str) -> None:
+        """過去の1時間足と日足を組み立てる。自分で受信した日はそれを使い、無い日は取り込んだ過去データで埋める。"""
+        own = self._own_past.get(symbol, [])
+        ref = self._history_ref.get(symbol) or datetime.now(JST).date().isoformat()
+        have = {b.start.date() for b in own}
+        ext = [b for b in self.store.load_bars(symbol, 60, source="history")
+               if b.start.date() not in have and b.start.date().isoformat() < ref]
+        merged = sorted(own + ext, key=lambda b: b.start)
+        if merged:
+            self.hourly_past[symbol] = merged
+        self.daily[symbol] = [b for b in self.store.load_bars(symbol, 1440, source="history")
+                              if b.start.date().isoformat() < ref]
+        self._hourly_ext.pop(symbol, None)
+        self._frames.pop(symbol, None)
 
     def _roll_day(self, symbol: str, old: list[Bar]) -> None:
         """日が変わった。前の日の足を1時間足にまとめて過去分に足し、前日の高値・安値を入れ替える。"""
@@ -250,13 +269,15 @@ class PaperEngine:
         かかわらず1種類にまとめる。同じ価格のものは1本にし、当日すでに抜かれたものは出さない。
         """
         out = sweep.liquidity_levels(bars, self.swing_params(minutes))
-        if minutes >= 60 or not bars:
-            return out                    # 1時間足は過去の日の足そのものが表示されているので、足す必要がない
+        if not bars:
+            return out
         hi, lo = max(b.high for b in day), min(b.low for b in day)
         extra = [dict(side=x["side"], level=x["level"]) for x in self.hourly_external(symbol)]
         prev = self.prev_days.get(symbol)
-        if prev:
+        if prev and minutes < 60:         # 1時間足は前日の足そのものが表示されているので、足さない
             extra += [dict(side="high", level=prev["high"]), dict(side="low", level=prev["low"])]
+        if minutes >= 60:
+            hi, lo = max(b.high for b in bars), min(b.low for b in bars)
         first = bars[0].start.isoformat()
         for x in extra:
             lv = x["level"]
@@ -275,13 +296,20 @@ class PaperEngine:
 
     def hourly_external(self, symbol: str) -> list[dict]:
         """過去の日をつなげた1時間足から見た外部流動性（数日間の大きな高値・安値）。上位足の流動性として使う。"""
-        past = self.hourly_past.get(symbol)
-        if not past:
+        past, daily = self.hourly_past.get(symbol) or [], self.daily.get(symbol) or []
+        if not past and not daily:
             return []
         hit = self._hourly_ext.get(symbol)
-        if hit is None or hit[0] != len(past):
-            lv = sweep.liquidity_levels(past, self.sweep_params, major=6, max_internal=0)
-            hit = (len(past), [dict(side=x["side"], level=x["level"], t=x["t"]) for x in lv])
+        if hit is None or hit[0] != (len(past), len(daily)):
+            lv = sweep.liquidity_levels(past, self.sweep_params, major=6, max_internal=0) if past else []
+            # 日足から見た大きな高値・安値（数か月〜2年）。今より上にどこまで流動性があるかを見るため
+            lv += sweep.liquidity_levels(daily, self.sweep_params, major=5, max_internal=0) if daily else []
+            seen, levels = set(), []
+            for x in lv:
+                if (x["side"], x["level"]) not in seen:
+                    seen.add((x["side"], x["level"]))
+                    levels.append(dict(side=x["side"], level=x["level"], t=x["t"]))
+            hit = ((len(past), len(daily)), levels)
             self._hourly_ext[symbol] = hit
         today = list(self.history.get(symbol, ()))
         hi = max((b.high for b in today[:-2]), default=None)
@@ -407,14 +435,19 @@ class PaperEngine:
                 label = "前日高値" if up else "前日安値"
                 m.update(liquidity="external", ext_kind=label, bos_setup=False, prev_level=touched)
                 sig.note = f"{label} {touched:,.1f} にもタッチ。" + sig.note
-            goal = prev.get("low") if up else prev.get("high")
-            nearer = goal and ((goal < bar.close) if up else (goal > bar.close)) and (
-                m.get("target") is None or abs(goal - bar.close) < abs(m["target"] - bar.close))
-            if nearer:                                # 前日の高値・安値のほうが近ければ、それを次の目標にする
+        # 次のオーダーブロックは、前日の高値・安値や、過去データ（1時間足・日足）から見た外部流動性のほうが
+        # 近ければそちらにする。当日の足の中に目標が無いとき（当日高値を更新中など）も、これで目標が出る。
+        cands = [(x["level"], "上位足") for x in self.hourly_external(bar.symbol) if x["side"] == ("low" if up else "high")]
+        if prev and prev.get("low" if up else "high"):
+            cands.append((prev["low" if up else "high"], "前日安値" if up else "前日高値"))
+        cands = [(lv, k) for lv, k in cands if ((lv < bar.close) if up else (lv > bar.close))]
+        if cands:
+            goal, kind = min(cands, key=lambda c: abs(c[0] - bar.close))
+            if m.get("target") is None or abs(goal - bar.close) < abs(m["target"] - bar.close):
                 old_target = sweep.target_text(m)
-                m.update(target=goal, target_pct=(goal / bar.close - 1) * 100, target_kind="前日安値" if up else "前日高値",
+                m.update(target=goal, target_pct=(goal / bar.close - 1) * 100, target_kind=kind,
                          waypoints=[v for v in m.get("waypoints", []) if abs(v - bar.close) < abs(goal - bar.close)])
-                sig.note = sig.note.replace(old_target, sweep.target_text(m) + f"（{m['target_kind']}）")
+                sig.note = sig.note.replace(old_target, sweep.target_text(m) + f"（{kind}）")
         # 1時間足（数日分）の外部流動性にもタッチしたか。タッチした側にもう流動性が残っていなければ、より強い場面
         hx = [x for x in self.hourly_external(bar.symbol) if x["side"] == ("high" if up else "low")]
         hit = [x["level"] for x in hx if ((bar.close <= x["level"] < sig.low) if up else (sig.low < x["level"] <= bar.close))]

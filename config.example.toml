@@ -20,6 +20,9 @@ exclude = []
 dir = "data"
 # 受信メッセージ（必要項目のみ）をJSONLで保存する。再生・検証用。
 record_raw = true
+# 過去の1時間足・日足を、公開されている株価データ（Yahoo Finance。非公式）から1日1回取り込む。
+# 上位足の流動性（数か月〜2年の高値・安値）を見るために使う。送るのは銘柄コードだけ。false で止められる。
+fetch_history = true
 
 [bars]
 minutes = 5

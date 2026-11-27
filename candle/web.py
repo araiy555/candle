@@ -278,6 +278,10 @@ async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?
   const TC={up:'pos',down:'neg'},fr=d.frames||[],pd=d.prev_day;
   $('mtf').innerHTML=(fr.length?'<span class="mut">足の切り替え</span>'+fr.map(f=>`<button data-tf="${f.minutes===d.base_minutes?0:f.minutes}" style="padding:3px 10px${(curTf||d.base_minutes)===f.minutes?';border-color:var(--acc);color:var(--acc);font-weight:700':''}">${esc(f.name)}</button>`).join('')+
     '<span class="mut" style="margin-left:10px">向き</span>'+fr.map(f=>`<span>${esc(f.name)} <b class="${TC[f.trend]||'mut'}">${esc(f.label)}</b></span>`).join('<span class="mut">／</span>'):'')+
+    (()=>{const px=d.bars.length?d.bars[d.bars.length-1].c:null,ex=(d.liquidity||[]).filter(q=>q.kind==='external');if(px==null||!ex.length)return '';
+      const fmtq=q=>`<b>${n(q.level,1)}</b><span class="mut">（${q.level>px?'+':''}${n((q.level/px-1)*100,2)}%）</span>`;
+      const up=ex.filter(q=>q.side==='high'&&q.level>px).sort((a,b)=>a.level-b.level).slice(0,3),dn=ex.filter(q=>q.side==='low'&&q.level<px).sort((a,b)=>b.level-a.level).slice(0,3);
+      return `<span style="flex-basis:100%"></span><span class="mut">上の外部流動性</span><span>${up.length?up.map(fmtq).join('　'):'<span class="mut">見つかっていません</span>'}</span><span class="mut" style="margin-left:14px">下の外部流動性</span><span>${dn.length?dn.map(fmtq).join('　'):'<span class="mut">見つかっていません</span>'}</span><span style="flex-basis:100%"></span>`})()+
     (pd?`<span class="mut" style="margin-left:10px">前日（${pd.day.slice(5)}）</span><span>高値 <b>${n(pd.high,1)}</b>　安値 <b>${n(pd.low,1)}</b>　終値 <b>${n(pd.close,1)}</b></span>`:'');
   const tt=(state?.history||[]).find(t=>t.id===curTrade),hmm=s=>new Date(s).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit'});
   $('tinfo').innerHTML=tt?`<b>この取引</b>　${md(tt.entry_time)} 買 ${n(tt.entry_price,1)} → ${hmm(tt.exit_time)} 売 ${n(tt.exit_price,1)}　${yen(tt.pnl)}　<span class="mut">${esc(tt.reason||'')}／最初の損切り ${n(tt.initial_stop,1)}／${n(tt.qty)}株</span>`+(d.bars.length?'':'　<span class="warn">この日の足が保存されていません</span>'):'';

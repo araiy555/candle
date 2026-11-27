@@ -142,3 +142,47 @@ def test_hourly_bars_follow_the_session_and_trend_turns_on_a_break():
     turned = wave([122, 112, 118, 106, 113, 100, 106, 120])                          # 最後の波の高値 113 を上に抜けた
     assert mtf.trend(turned) == "up"
     assert mtf.trend(wave([100, 110, 104, 116, 109, 122, 115, 100])) == "down"       # 逆も同じ
+
+
+def test_imported_history_gives_upper_external_liquidity(tmp_path):
+    """自分で受信した数日分より上に高値が無くても、取り込んだ過去の日足・1時間足から上の外部流動性を出す。"""
+    import time
+    from datetime import date, datetime
+    from candle.app import App
+    from candle.bars import JST, Bar
+    from candle.config import Config
+    from candle.store import Store
+    from candle.yahoo import parse_history
+    cfg = Config(data_dir=tmp_path)
+    app = App(cfg)
+    store = Store(tmp_path / "c.sqlite")
+    app.setup(store)
+    # 自分で受信した分：前日 14,300〜14,715、当日は 14,900 まで上げている（数日間の高値を更新中）
+    store.save_bars(make_bars([(14500, 14715, 14300, 14310)] * 30, "6861", start=(9, 0), day=26, minutes=1))
+    today = make_bars([(14850 + i, 14860 + i, 14840 + i, 14855 + i) for i in range(40)], "6861", start=(9, 0), day=27, minutes=1)
+    e = app.engine
+    e.load_history(["6861"], 1, today=date(2026, 11, 27))
+    for b in today:
+        e.on_bar(b)
+    assert [x for x in e.chart_data("6861")["liquidity"] if x["side"] == "high" and x["level"] > 14900] == []
+
+    def fake(symbol, minutes):                       # 過去の日足：9月に 15,800 の高値、その後は下
+        if minutes == 60:
+            return []
+        highs = [15200, 15500, 15800, 15400, 15000, 14800, 14600, 14900, 14700, 14500, 14600, 14400, 14700, 14600]
+        return [Bar(symbol, datetime(2026, 9, 1 + i, 9, 0, tzinfo=JST), 1440, h - 150, h, h - 300, h - 100, 1e6, 0, True)
+                for i, h in enumerate(highs)]
+    app.fetch_history(["6861"], fetcher=fake, pause=0)
+    for _ in range(50):
+        if not app._hist_queue.empty():
+            break
+        time.sleep(0.02)
+    app._apply_history()
+    ups = sorted(x["level"] for x in e.chart_data("6861")["liquidity"] if x["side"] == "high" and x["kind"] == "external")
+    assert 15800 in ups                                                # 上の外部流動性として出る
+    assert 15800 in {x["level"] for x in e.chart_data("6861", 60)["liquidity"] if x["side"] == "high"}
+    assert (tmp_path / "history_fetched.json").exists() and len(e.daily["6861"]) == 14
+    payload = {"chart": {"result": [{"timestamp": [1790553600, 1790640000], "indicators": {"quote": [{
+        "open": [100, None], "high": [110, 1], "low": [95, 1], "close": [105, 1], "volume": [1000, 0]}]}}]}}
+    (bar,) = parse_history("T", payload, 1440)                         # 値の欠けた日は捨てる
+    assert (bar.minutes, bar.high, bar.start.hour) == (1440, 110, 9)
