@@ -27,6 +27,7 @@ class TradeSettings:
     min_price: float = 500           # 株価の下限（円）。これより安い銘柄は通知も売買もしない。0なら除かない
     # 通知するサイン（戦略IDをカンマ区切り）。管理画面のチェックで選ぶ
     notify_on: str = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip"
+    min_range_pct: float = 0.15      # 足の平均値幅率の下限（%）。これ未満は値動きが小さい（レンジ）とみなして見送る。0なら除かない
     min_drop_pct: float = 0.3        # 直前の下落率の下限（%）。横ばいの中のサインを除く。0なら除かない
     mkt_fut_drop: float = 0.3        # 地合い: 先物が5分でこの%以上下げたら「警戒」
     mkt_topix_drop: float = 0.15     # 地合い: 加えてTOPIXが5分でこの%以上下げたら「警戒強化」
@@ -57,6 +58,8 @@ class TradeSettings:
             raise ValueError("余力に対する割合は、0より大きく100%以下にしてください")
         if self.per_trade_pct > self.total_pct:
             raise ValueError("1回の割合は、合計の割合以下にしてください")
+        if not 0 <= self.min_range_pct <= 5:
+            raise ValueError("平均値幅率の下限は0〜5%にしてください")
         if self.min_price < 0:
             raise ValueError("株価の下限は0以上にしてください")
         if self.max_hold_min < 0:

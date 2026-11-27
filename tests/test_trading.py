@@ -387,7 +387,15 @@ def test_engine_applies_min_drop_setting_and_records_the_decline():
         e.on_bar(b)
     assert len(sent) == 1 and store.recent_signals("paper")[0]["drop_pct"] > 5
     e.update_settings({"min_drop_pct": 0})
+    assert e.settings.min_range_pct == 0.15
     for b in make_bars(flat, "9433"):
+        e.on_bar(b)
+    assert len(sent) == 1 and e.is_ranging("9433")               # 値動きが小さい（レンジ）間も通知しない
+    e.watchlist = ["9433", "7203"]
+    e.on_clock(T0)
+    assert [w["ranging"] for w in e.snapshot["watchlist"]] == [True, False]
+    e.update_settings({"min_range_pct": 0})
+    for b in make_bars(flat, "9434"):
         e.on_bar(b)
     assert len(sent) == 2 and round(store.recent_signals("paper")[0]["drop_pct"], 2) == 0.12
 

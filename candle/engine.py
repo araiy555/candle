@@ -128,6 +128,8 @@ class PaperEngine:
             return
         if bar.close < self.settings.min_price:
             return   # 株価の低い銘柄は対象外（1ティックが相対的に大きく、足の形が崩れやすい）
+        if self.is_ranging(bar.symbol):
+            return   # 値動きが小さい（レンジ）間は、通知も売買もしない
         window = contiguous_tail(list(h)[-80:])
         self._check_fvg(bar, h)
         self._check_sweep(bar, h)
@@ -178,6 +180,11 @@ class PaperEngine:
         if len(bars) < 5:
             return None
         return sum((b.high - b.low) / b.close for b in bars) / len(bars) * 100
+
+    def is_ranging(self, symbol: str) -> bool:
+        """値動きが小さい（レンジ）か。足の平均値幅率が設定の下限より小さいとき。足が足りなければ False。"""
+        r = self.range_pct(symbol)
+        return r is not None and r < self.settings.min_range_pct
 
     def day_range_pct(self, symbol: str) -> float | None:
         """当日の値幅率（%）。（当日高値−当日安値）÷始値。受信していなければ None。"""
@@ -368,8 +375,10 @@ class PaperEngine:
         cheap = (msg.get("CurrentPrice") or 0) < self.settings.min_price
         if cheap:
             return
+        self._check_opening(symbol, msg, now)     # 寄り付き直後は足が少なく、レンジの判定はしない
+        if self.is_ranging(symbol):
+            return
         self._check_walls(symbol, msg, now)
-        self._check_opening(symbol, msg, now)
         if (sig is None or not self.flow_notify or now.astimezone(JST).time() >= self.exit_after
                 or self.in_quiet_open(now)):
             return
@@ -568,6 +577,7 @@ class PaperEngine:
             watchlist=[dict(symbol=s, name=self.names.get(s), price=self.prices.get(s),
                             excluded=(self.prices.get(s) or 0) < self.settings.min_price
                             and self.prices.get(s) is not None,
+                            ranging=self.is_ranging(s),
                             vwap=self.vwap(s),
                             range_pct=self.range_pct(s), day_range_pct=self.day_range_pct(s),
                             change_pct=(self.quotes.get(s) or {}).get("ChangePreviousClosePer"))
