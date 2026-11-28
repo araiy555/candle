@@ -94,6 +94,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <a id="l1" target="_blank" rel="noopener">Yahoo!ファイナンス</a><a id="l2" target="_blank" rel="noopener">TradingView</a><a id="l3" target="_blank" rel="noopener">株探</a>
 <span style="flex:1"></span><button id="close">閉じる</button></div>
 <div class="kpis" id="qinfo" style="padding:10px 16px 0;gap:18px"></div>
+<div style="padding:8px 16px 0;font-size:12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap" class="mut">ズーム <button id="zin" style="padding:2px 10px">＋</button><button id="zout" style="padding:2px 10px">－</button><button id="zall" style="padding:2px 10px">全体</button><span>マウスのホイールで拡大・縮小、ドラッグで左右に移動</span><span id="zinfo" style="margin-left:8px"></span></div>
 <div id="mtf" style="padding:10px 16px 0;font-size:13px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>
 <div style="padding:6px 16px 0;font-size:12px" class="mut"><span style="display:inline-block;width:22px;border-top:2px solid var(--acc);vertical-align:middle;margin-right:5px"></span>VWAP（受信した値。受信前の時間帯は線がありません）</div>
 <div style="padding:4px 16px 0;font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px" class="mut"><span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--up);vertical-align:middle;margin-right:5px"></span>直近の上昇の範囲（中央の線より上が割高ゾーン、下が割安ゾーン）</span><span><span style="display:inline-block;width:18px;height:8px;background:var(--warn);opacity:.75;vertical-align:middle;margin-right:5px"></span>上昇中の出来高の分布</span><span><span style="display:inline-block;width:18px;height:8px;border:1.5px solid var(--warn);vertical-align:middle;margin-right:5px"></span>FVG</span><span><span style="display:inline-block;width:18px;border-top:2px solid #d4a700;vertical-align:middle;margin-right:5px"></span>上昇前のレンジのPOC</span><span><span style="display:inline-block;width:18px;height:0;border-top:3px solid var(--up);vertical-align:middle;margin-right:5px"></span>外部流動性（当日・前日・数日間の、大きな高値と安値）</span><span><span style="display:inline-block;width:18px;height:0;border-top:1px dashed var(--warn);vertical-align:middle;margin-right:5px"></span>内部流動性（その内側の小さな波。まだ抜かれていないもの）</span></div>
@@ -112,7 +113,7 @@ function table(el,heads,rows,empty){
   $(el).innerHTML='<table><thead><tr>'+heads.map(h=>`<th>${h}</th>`).join('')+'</tr></thead><tbody>'+
     rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
-let halted=false,state=null,cur=null,formLoaded=false;let curDay=null,curTrade=null,curTf=0;const dayOf=t=>new Date(t).toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});const closing=new Set();
+let halted=false,state=null,cur=null,formLoaded=false;let curDay=null,curTrade=null,curTf=0,zN=null,zEnd=0,lastData=null,geom=null;const dayOf=t=>new Date(t).toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'});const closing=new Set();
 const FIELDS=['stop_mode','stop_value','trail_mode','trail_value','size_mode','per_trade_pct','total_pct','per_trade_cap','total_cap','daily_max_loss','max_hold_min','quiet_open_min','min_price','min_range_pct','vwap_rule','min_drop_pct','mkt_fut_drop','mkt_topix_drop','mkt_breadth','notify_on'];
 function vdiff(price,vwap){if(price==null||!vwap)return '<span class="mut">-</span>';const d=(price-vwap)/vwap*100;return `<span class="${d>0?'pos':d<0?'neg':''}">${d>0?'+':''}${n(d,2)}%</span>`}
 function vcell(price,vwap){return vwap?`${n(vwap,1)} <span style="font-size:12px">(${vdiff(price,vwap)})</span>`:'<span class="mut">-</span>'}
@@ -182,7 +183,11 @@ function el(tag,attrs,text){const e=document.createElementNS(NS,tag);for(const k
 function ticks(lo,hi,count){const raw=(hi-lo)/count,p=Math.pow(10,Math.floor(Math.log10(raw))),f=raw/p,step=(f<1.5?1:f<3?2:f<7?5:10)*p,out=[];
   for(let v=Math.ceil(lo/step)*step;v<=hi+1e-9;v+=step)out.push(v);return out}
 function draw(data){
-  const svg=$('svg'),tip=$('tip'),bars=data.bars;svg.innerHTML='';tip.style.display='none';
+  const svg=$('svg'),tip=$('tip'),all=data.bars;svg.innerHTML='';tip.style.display='none';lastData=data;
+  // ズーム：表示する本数（zN）と、右端から何本戻った位置か（zEnd）。縦の目盛りは、見えている足に合わせ直す
+  if(zN&&zN<all.length)zEnd=Math.max(0,Math.min(all.length-zN,zEnd));else{zN=null;zEnd=0}
+  const bars=zN?all.slice(all.length-zEnd-zN,all.length-zEnd):all;
+  $('zinfo').textContent=zN?`${all.length}本のうち ${bars.length}本を表示中`:'';
   const W=svg.clientWidth||900,H=460,L=8,R=64,T=14,VH=84,VG=22,B=26+VH+VG;svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
   if(!bars.length){svg.appendChild(el('text',{x:W/2,y:H/2,'text-anchor':'middle',fill:'var(--mut)','font-size':13},'まだ足がありません（起動後に確定した足から表示します）'));return}
   const many=(data.minutes||0)>=60,bday=dayOf(bars[0].t),marks=many?[]:(state?.signals||[]).filter(s=>s.symbol===data.symbol&&dayOf(s.time)===bday);   // 1時間足では、短い足のサインの印は出さない
@@ -193,6 +198,7 @@ function draw(data){
   let lo=Math.min(...bars.map(b=>b.l),...marks.map(m=>m.pattern_low),...vw,...(selT?[selT.initial_stop]:[])),hi=Math.max(...bars.map(b=>b.h),...vw);
   const pad=(hi-lo)*0.08||hi*0.002;lo-=pad*1.6;hi+=pad;
   const n0=Math.max(bars.length,30),bw=(W-L-R)/n0,x=i=>L+bw*(i+.5),y=v=>T+(hi-v)/(hi-lo)*(H-T-B);
+  geom={L,bw,W};
   const dec=hi<1000?1:0,fmt=v=>v.toLocaleString('ja-JP',{minimumFractionDigits:dec,maximumFractionDigits:dec});
   for(const v of ticks(lo,hi,5)){svg.appendChild(el('line',{x1:L,x2:W-R,y1:y(v),y2:y(v),stroke:'var(--line)','stroke-width':1}));
     svg.appendChild(el('text',{x:W-R+6,y:y(v)+4,fill:'var(--mut)','font-size':11},fmt(v)))}
@@ -288,12 +294,12 @@ async function chart(){if(!cur)return;let d;try{d=await (await fetch('/api/bars?
   if(d.day)$('note').textContent=`${d.minutes||''}分足・${d.day} の保存済みの足。青い丸が買い、赤（利益）または緑（損失）の丸が売りで、線でつないでいます。`;
   else $('note').textContent+=' 青い丸が買い、赤（利益）・緑（損失）の丸が売り。';
   if(!$('tip').style.display||$('tip').style.display==='none')draw(d)}
-function openChart(sym,trade){cur=sym;curTf=0;$('mtf').innerHTML='';curTrade=trade?trade.id:null;curDay=trade?dayOf(trade.entry_time):null;$('tinfo').innerHTML='';$('l1').href=`https://finance.yahoo.co.jp/quote/${sym}.T/chart`;$('l2').href=`https://jp.tradingview.com/chart/?symbol=TSE%3A${sym}`;
+function openChart(sym,trade){cur=sym;curTf=0;zN=null;zEnd=0;lastData=null;$('mtf').innerHTML='';curTrade=trade?trade.id:null;curDay=trade?dayOf(trade.entry_time):null;$('tinfo').innerHTML='';$('l1').href=`https://finance.yahoo.co.jp/quote/${sym}.T/chart`;$('l2').href=`https://jp.tradingview.com/chart/?symbol=TSE%3A${sym}`;
   $('l3').href=`https://kabutan.jp/stock/chart?code=${sym}`;$('copy').textContent='銘柄コードをコピー';$('kmsg').textContent='';$('svg').innerHTML='';$('dt').textContent=sym;$('dlg').showModal();chart()}
 document.addEventListener('click',async e=>{const c=e.target.closest('[data-close]');if(c){if(!confirm(c.dataset.label+' を成行で決済します。よろしいですか？'))return;
   const id=Number(c.dataset.close);closing.add(id);await fetch('/api/close?id='+id,{method:'POST'});load();return}
   const k=e.target.closest('[data-kabu]');if(k){const r=await kabu(k.dataset.kabu);if(r&&!r.ok)alert(r.message);return}
-  const tfb=e.target.closest('[data-tf]');if(tfb){curTf=Number(tfb.dataset.tf);$('tip').style.display='none';chart();return}
+  const tfb=e.target.closest('[data-tf]');if(tfb){curTf=Number(tfb.dataset.tf);zN=null;zEnd=0;$('tip').style.display='none';chart();return}
   const tr=e.target.closest("[data-tid]");if(tr){const t=(state?.history||[]).find(t=>String(t.id)===tr.dataset.tid);if(t)openChart(t.symbol,t);return}
   const b=e.target.closest('[data-sym]');if(b)openChart(b.dataset.sym)});
 async function kabu(sym,msgEl){if(msgEl)msgEl.textContent='切り替え中…';try{const r=await (await fetch('/api/kabu-chart?symbol='+encodeURIComponent(sym),{method:'POST'})).json();
@@ -311,6 +317,18 @@ $('auto').onchange=()=>fetch('/api/auto-chart?on='+($('auto').checked?1:0),{meth
 $('close').onclick=()=>$('dlg').close();$('dlg').addEventListener('close',()=>{cur=null});
 $('dlg').addEventListener('click',e=>{if(e.target===$('dlg'))$('dlg').close()});
 $('copy').onclick=async()=>{try{await navigator.clipboard.writeText(cur);$('copy').textContent='コピーしました'}catch(e){$('copy').textContent='コピーできませんでした'}};
+// --- チャートのズームと移動 ---
+function zoom(factor,px){if(!lastData||!geom)return;const all=lastData.bars.length;if(all<16)return;const cur=zN||all,next=Math.max(15,Math.min(all,Math.round(cur*factor)));if(next===cur)return;
+  const idx=px==null?cur/2:Math.max(0,Math.min(cur,(px-geom.L)/geom.bw)),a=all-zEnd-cur+idx,start=Math.round(a-idx/cur*next);   // マウスの位置の足を動かさずに拡大・縮小する
+  zEnd=Math.max(0,Math.min(all-next,all-(start+next)));zN=next>=all?null:next;draw(lastData)}
+(()=>{const svg=$('svg');let drag=null;
+  svg.addEventListener('wheel',e=>{if(!lastData)return;e.preventDefault();const r=svg.getBoundingClientRect();zoom(e.deltaY>0?1.25:0.8,(e.clientX-r.left)*geom.W/r.width)},{passive:false});
+  svg.style.userSelect='none';
+  svg.addEventListener('mousedown',e=>{e.preventDefault();if(zN)drag={x:e.clientX,end:zEnd};svg.style.cursor=zN?'grabbing':''});   // ドラッグで画面の文字が選択されないようにする
+  window.addEventListener('mousemove',e=>{if(!drag||!lastData||!geom)return;const r=svg.getBoundingClientRect(),shift=Math.round((e.clientX-drag.x)*geom.W/r.width/geom.bw),v=Math.max(0,Math.min(lastData.bars.length-zN,drag.end+shift));
+    if(v!==zEnd){zEnd=v;draw(lastData)}});
+  window.addEventListener('mouseup',()=>{drag=null;svg.style.cursor=''});
+  $('zin').onclick=()=>zoom(0.6);$('zout').onclick=()=>zoom(1.6);$('zall').onclick=()=>{zN=null;zEnd=0;if(lastData)draw(lastData)}})();
 load();setInterval(load,2000);setInterval(chart,5000);
 </script></body></html>"""
 
