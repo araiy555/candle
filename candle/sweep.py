@@ -101,6 +101,15 @@ def liquidity_levels(bars: Sequence[Bar], p: SweepParams | None = None, major: i
     return out
 
 
+def _clusters(levels: list[float], tol: float = 0.0015) -> list[float]:
+    """ほぼ同じ価格（0.15%以内）の流動性を、1つのプールとして数える。"""
+    out: list[float] = []
+    for lv in sorted(levels):
+        if not out or (lv - out[-1]) / out[-1] > tol:
+            out.append(lv)
+    return out
+
+
 def targets(bars: Sequence[Bar], price: float, p: SweepParams | None = None, side: str = "low") -> dict:
     """流動性にタッチした後に、向かう先（反対側の流動性）を近い順に並べる。
 
@@ -244,9 +253,17 @@ def _detect_low(bars: Sequence[Bar], p: SweepParams | None = None) -> SweepSigna
         metrics.update(targets(bars, cur.close, p))
         kind = f"下の外部流動性（{ctx['ext_kind']}）" if ctx["liquidity"] == "external" else "下の内部流動性"
         metrics["side"] = "low"
+        # このタッチで、下の流動性がすべて無くなったか（＝流動性が上にしか残っていない＝片側に偏った）
+        left = _clusters([lv for _, lv in pools(bars, p, upto=s) if lv < low])
+        metrics["cleared"], metrics["left_same_side"] = not left, len(left)
+        one_sided = ("　下の流動性はこれで無くなり、上にしか残っていません（流動性が上に偏った）。" if not left
+                     else f"　下にはまだ流動性が{len(left)}つ残っています。")
         zone = {"discount": "【割安ゾーン】", "premium": "【割高ゾーン】", "below": "【上昇の起点より下】"}.get(ctx["zone"], "")
         note = (f"{zone}{kind} {level:,.1f} にタッチ（{low:,.1f} まで）して {cur.close:,.1f} に回復。"
-                f"出来高 平均の{ratio:.1f}倍　→ " + target_text(metrics))
+                f"出来高 平均の{ratio:.1f}倍　→ " + target_text(metrics) + one_sided)
+        conditions.append(dict(key="cleared", label="下の流動性が無くなった", ok=not left,
+                               text="このタッチで、当日の下の流動性はすべて使われた。残っているのは上だけ。" if not left
+                               else f"下にまだ {len(left)}つ、割られていない安値が残っている。"))
         conditions += context_conditions(ctx)
         return SweepSignal(cur.symbol, cur.end, cur.close, level, bars[i].start, low, note,
                            conditions, metrics)
@@ -293,9 +310,14 @@ def _detect_high(bars: Sequence[Bar], p: SweepParams) -> SweepSignal | None:
                        bars_since_pool=s - i, reclaim_bars=back + 1, after_bos=False, zone=None, bos_setup=False,
                        liquidity="external" if ext else "internal", ext_kind=ext)
         metrics.update(targets(bars, cur.close, p, side="high"))
+        left = _clusters([x["level"] for x in liquidity_levels(bars[:s], p, max_internal=99)
+                          if x["side"] == "high" and x["level"] > high])
+        metrics["cleared"], metrics["left_same_side"] = not left, len(left)
+        one_sided = ("　上の流動性はこれで無くなり、下にしか残っていません（流動性が下に偏った）。" if not left
+                     else f"　上にはまだ流動性が{len(left)}つ残っています。")
         kind = f"上の外部流動性（{ext}）" if ext else "上の内部流動性"
         note = (f"{kind} {level:,.1f} にタッチ（{high:,.1f} まで）して {cur.close:,.1f} に反落。"
-                f"出来高 平均の{ratio:.1f}倍　→ " + target_text(metrics))
+                f"出来高 平均の{ratio:.1f}倍　→ " + target_text(metrics) + one_sided)
         conditions = [
             dict(key="pool", label="上の流動性", ok=True,
                  text=f"{bars[i].start:%H:%M} の高値 {level:,.1f}円。それ以降 {s - i}本、抜かれていなかった。"

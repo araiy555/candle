@@ -66,6 +66,7 @@ class PaperEngine:
         # 寄り付き後の押し目買い（厚い買い板を背に、数ティック上を狙う）。通知と記録のみ
         self.opening = opening.OpenTracker() if OPEN_STRATEGY in wanted else None
         self.prev_days: dict[str, dict] = {}
+        self.bias: dict[str, dict] = {}     # 銘柄ごとの目線（当日、最後にタッチした流動性から決める）
         self.hourly_past: dict[str, list[Bar]] = {}
         self.daily: dict[str, list[Bar]] = {}        # 過去の日足（取り込んだ過去データ。遠い高値・安値を見る）
         self._own_past: dict[str, list[Bar]] = {}
@@ -180,6 +181,7 @@ class PaperEngine:
         if h and h[-1].start.date() != bar.start.date():
             self._roll_day(bar.symbol, list(h))
             h.clear()
+            self.bias.pop(bar.symbol, None)       # 日をまたいだら、流動性の見方は数え直す
         if bar.symbol in self.last_day:
             self._roll_day(bar.symbol, self.last_day.pop(bar.symbol))   # 当日の足が来たので、表示用の前営業日分を過去へ
         h.append(bar)
@@ -265,24 +267,20 @@ class PaperEngine:
         self.notify(title, f"{body}　{d}" if d else body, symbol)
 
     def chart_liquidity(self, symbol: str, bars: list[Bar], minutes: int, day: list[Bar]) -> list[dict]:
-        """チャートに出す流動性。外部流動性は、出どころ（当日の大きな波・前日の高値安値・数日間の高値安値）に
-        かかわらず1種類にまとめる。同じ価格のものは1本にし、当日すでに抜かれたものは出さない。
+        """チャートに線で出す流動性。
+
+        短い足（1分・5分・15分）は当日の流動性だけにする（デイトレでは、日をまたいだら流動性は数え直す）。
+        数日〜数か月の大きな高値・安値は、1時間足のチャートで見る（上位足の外部流動性）。
         """
         out = sweep.liquidity_levels(bars, self.swing_params(minutes))
-        if not bars:
+        if minutes < 60 or not bars:
             return out
-        hi, lo = max(b.high for b in day), min(b.low for b in day)
-        extra = [dict(side=x["side"], level=x["level"]) for x in self.hourly_external(symbol)]
-        prev = self.prev_days.get(symbol)
-        if prev and minutes < 60:         # 1時間足は前日の足そのものが表示されているので、足さない
-            extra += [dict(side="high", level=prev["high"]), dict(side="low", level=prev["low"])]
-        if minutes >= 60:
-            hi, lo = max(b.high for b in bars), min(b.low for b in bars)
+        hi, lo = max(b.high for b in bars), min(b.low for b in bars)
         first = bars[0].start.isoformat()
-        for x in extra:
+        for x in self.hourly_external(symbol):      # 日足から見た遠い高値・安値も、1時間足には出す
             lv = x["level"]
-            if lv is None or (x["side"] == "high" and hi > lv) or (x["side"] == "low" and lo < lv):
-                continue                  # 当日すでに抜かれた（流動性は使われた）
+            if (x["side"] == "high" and hi > lv) or (x["side"] == "low" and lo < lv):
+                continue
             same = next((o for o in out if o["side"] == x["side"] and abs(o["level"] - lv) <= lv * 0.0002), None)
             if same:
                 same["kind"] = "external"
@@ -435,15 +433,15 @@ class PaperEngine:
                 label = "前日高値" if up else "前日安値"
                 m.update(liquidity="external", ext_kind=label, bos_setup=False, prev_level=touched)
                 sig.note = f"{label} {touched:,.1f} にもタッチ。" + sig.note
-        # 次のオーダーブロックは、前日の高値・安値や、過去データ（1時間足・日足）から見た外部流動性のほうが
-        # 近ければそちらにする。当日の足の中に目標が無いとき（当日高値を更新中など）も、これで目標が出る。
+        # 次のオーダーブロックは、当日の流動性から決める（日をまたいだら数え直す）。当日の足の中に目標が無いとき
+        # （当日高値を更新中など）だけ、上位足（前日の高値・安値、過去の1時間足・日足）の外部流動性を使う。
         cands = [(x["level"], "上位足") for x in self.hourly_external(bar.symbol) if x["side"] == ("low" if up else "high")]
         if prev and prev.get("low" if up else "high"):
             cands.append((prev["low" if up else "high"], "前日安値" if up else "前日高値"))
         cands = [(lv, k) for lv, k in cands if ((lv < bar.close) if up else (lv > bar.close))]
         if cands:
             goal, kind = min(cands, key=lambda c: abs(c[0] - bar.close))
-            if m.get("target") is None or abs(goal - bar.close) < abs(m["target"] - bar.close):
+            if m.get("target") is None:      # 当日の足の中に目標が無いときだけ、上位足の流動性を目標にする
                 old_target = sweep.target_text(m)
                 m.update(target=goal, target_pct=(goal / bar.close - 1) * 100, target_kind=kind,
                          waypoints=[v for v in m.get("waypoints", []) if abs(v - bar.close) < abs(goal - bar.close)])
@@ -467,6 +465,10 @@ class PaperEngine:
                                          for x in (SWEEP_STRATEGY, BOS_STRATEGY, EXT_STRATEGY)):
             return
         self.sweep_seen.add(key)
+        # 目線：下の流動性にタッチしたら上、上の流動性にタッチしたら下（流動性に触れるまでは決めない）
+        self.bias[bar.symbol] = dict(
+            dir="down" if up else "up", time=bar.end.isoformat(), level=sig.level, target=m.get("target"),
+            cleared=bool(m.get("cleared")), liquidity=m.get("liquidity"))
         self.seen.add((sid, bar.symbol, bar.end.isoformat()))
         name = STRATEGY_BY_ID[sid].name
         log.info("サイン %s %s %s", name, bar.symbol, sig.note)
@@ -722,6 +724,8 @@ class PaperEngine:
         return dict(symbol=symbol, name=self.names.get(symbol), minutes=minutes,
                     base_minutes=base[0].minutes if base else None, frames=frames,
                     prev_day=self.prev_days.get(symbol),
+                    htf_external=self.hourly_external(symbol),
+                    bias=self.bias.get(symbol),
                     shown_day=base[0].start.date().isoformat() if base else None,
                     live=bool(self.history.get(symbol)),
                     quote=self.quotes.get(symbol),

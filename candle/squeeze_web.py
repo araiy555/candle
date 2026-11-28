@@ -227,7 +227,7 @@ const lab=h=>h<60?h+'秒後':(h/60)+'分後';
 const G='<span class="tag">取得</span>',C='<span class="tag c">計算</span>';
 let H=[10,30,60,180,300],data=null;
 const ZN={discount:'割安ゾーン',premium:'割高ゾーン',below:'起点より下'};
-function scene(m){if(m.liquidity==null)return '<span class="mut">記録なし</span>';if(m.side==='high')return `<b class="neg">上にタッチ→下へ</b> <span class="mut">${m.liquidity==='external'?'外部流動性'+(m.ext_kind?'（'+esc(m.ext_kind)+'）':''):'内部流動性'}</span>`;return `<b class="pos">下にタッチ→上へ</b> <span class="mut">${m.after_bos?'高値ブレイク後':'高値ブレイクなし'}／${ZN[m.zone]||'判定できず'}／${m.liquidity==='internal'?'内部流動性':'外部流動性'+(m.ext_kind?'（'+esc(m.ext_kind)+'）':'')}</span>`}
+function scene(m){if(m.liquidity==null)return '<span class="mut">記録なし</span>';if(m.side==='high')return `<b class="neg">上にタッチ→下へ</b> <span class="mut">${m.liquidity==='external'?'外部流動性'+(m.ext_kind?'（'+esc(m.ext_kind)+'）':''):'内部流動性'}${m.cleared?'／<b>上の流動性なし</b>':''}</span>`;return `<b class="pos">下にタッチ→上へ</b> <span class="mut">${m.after_bos?'高値ブレイク後':'高値ブレイクなし'}／${ZN[m.zone]||'判定できず'}／${m.liquidity==='internal'?'内部流動性':'外部流動性'+(m.ext_kind?'（'+esc(m.ext_kind)+'）':'')}${m.cleared?'／<b>下の流動性なし</b>':''}</span>`}
 function hcell(v){if(v.pending)return '<span class="mut">記録中</span>';if(v.missing)return `<span class="miss" title="${esc(v.missing)}">欠損</span>`;return pct(v.ret)}
 function table(heads,rows,cls){return '<table><thead><tr>'+heads.map(h=>`<th${h.l?' class="l"':''}>${h.t??h}</th>`).join('')+'</tr></thead><tbody>'+rows.map(r=>`<tr${r.attr||''}>`+r.cells.map(c=>`<td${c&&c.l?' class="l"':c&&c.w?' class="wrap"':''}>${c&&c.v!==undefined?c.v:c}</td>`).join('')+'</tr>').join('')+'</tbody></table>'}
 async function loadList(){

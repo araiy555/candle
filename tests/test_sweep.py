@@ -33,7 +33,8 @@ def test_sweep_and_reclaim_in_one_bar_with_volume():
     assert sig is not None and (sig.level, sig.low, sig.price) == (4930, 4915, 4944)
     assert sig.metrics["volume_ratio"] > 3 and sig.metrics["reclaim_bars"] == 1
     assert sig.note.startswith("【上昇の起点より下】下の外部流動性（当日安値） 4,930.0 にタッチ（4,915.0 まで）して 4,944.0 に回復")
-    assert "次のオーダーブロック：上の外部流動性 4,977.0（+0.67%）" in sig.note and len(sig.conditions) == 6
+    assert "次のオーダーブロック：上の外部流動性 4,977.0（+0.67%）" in sig.note and len(sig.conditions) == 7
+    assert sig.metrics["cleared"] is True and "上にしか残っていません" in sig.note      # 当日安値を取った → 下に流動性は無い
     assert sig.metrics["target"] == 4977 and sig.metrics["waypoints"] == []
     m = sig.metrics                                                     # 当日安値を割った＝外部流動性。割安ゾーンではない
     assert (m["liquidity"], m["zone"], m["bos_setup"]) == ("external", "below", False)
@@ -102,6 +103,7 @@ def test_sweep_after_bos_in_discount_zone_is_tagged():
     assert (bos["bos_level"], bos["bos_index"], bos["bos_volume_ratio"]) == (1010, 16, 3.0)
     m = detect(bars).metrics
     assert (m["after_bos"], m["zone"], m["liquidity"], m["bos_setup"]) == (True, "discount", "internal", True)
+    assert (m["cleared"], m["left_same_side"]) == (False, 2) and "下にはまだ流動性が2つ残っています" in detect(bars).note
     assert (m["leg_low"], m["leg_high"], m["bos_level"]) == (999, 1040, 1010)
     high = bars_from(BOS[:-2] + [(1024, 1031, 1023, 1030, 3000), (1030, 1031, 1026, 1027, 3000)])
     assert detect(high) is None                                          # 割っていなければ出ない
@@ -142,8 +144,8 @@ def test_one_notification_for_external_and_internal_with_next_target(tmp_path):
     # 前日安値も割って戻した／前日高値のほうが近ければ、それを次の目標にする
     sent, _, m = run("c", BOS + SWEEP, prev=dict(high=1030, low=1017))
     assert "前日安値 1,017.0 にもタッチ" in sent[0][1]
-    assert "次のオーダーブロック：上の外部流動性 1,030.0（+0.98%）（前日高値）" in sent[0][1]
-    assert (m["liquidity"], m["ext_kind"], m["target"], m["prev_level"]) == ("external", "前日安値", 1030, 1017)
+    assert "次のオーダーブロック：上の外部流動性 1,040.0（+1.96%）" in sent[0][1]       # 目標は当日の流動性から
+    assert (m["liquidity"], m["ext_kind"], m["target"], m["prev_level"]) == ("external", "前日安値", 1040, 1017)
     # 以前に分けていたサインのIDが設定に残っていても問題ない
     old = TradeSettings.from_dict({"notify_on": "tweezer_bottom,liq_sweep,bos_dip,ext_liq"})
     assert old.notifies("liq_sweep")
@@ -211,6 +213,24 @@ def test_touch_on_upper_liquidity_points_to_order_block_below(tmp_path):
         e.on_bar(b)
     assert [a[0] for a in sent] == ["流動性タッチ  5803"]
     assert "前日高値 5,080.0 にもタッチ" in sent[0][1]
-    assert "次のオーダーブロック：下の外部流動性 5,040.0（-0.32%）（前日安値）" in sent[0][1]
+    assert "次のオーダーブロック：下の外部流動性 5,023.0（-0.65%）" in sent[0][1]            # 目標は当日の流動性から
     (ev,) = squeeze_web.list_events(tmp_path / "c.sqlite", kind="sweep")["events"]
     assert ev["metrics"]["side"] == "high" and ev["metrics"]["ext_kind"] == "前日高値" and e.open == []
+
+
+def test_bias_follows_the_last_liquidity_touch_and_resets_next_day(tmp_path):
+    from candle.engine import PaperEngine
+    from candle.risk import RiskLimits, RiskManager
+    from candle.store import Store
+    e = PaperEngine(Store(tmp_path / "c.sqlite"), RiskManager(RiskLimits()), enabled={"tweezer_bottom"},
+                    trade_enabled=False, notify=lambda *a: None, notify_ids={"liq_sweep"})
+    bars = bars_from(BASE + [(4942, 4945, 4915, 4944, 12000)], symbol="5803")
+    for b in bars[:-1]:
+        e.on_bar(b)
+    assert e.chart_data("5803")["bias"] is None                         # 流動性に触れるまでは、目線を決めない
+    e.on_bar(bars[-1])
+    b = e.chart_data("5803")["bias"]
+    assert (b["dir"], b["level"], b["target"], b["cleared"], b["liquidity"]) == ("up", 4930, 4977, True, "external")
+    nxt = make_bars([(4950, 4952, 4948, 4951)], "5803", start=(9, 0), day=25, minutes=1)[0]
+    e.on_bar(nxt)
+    assert e.chart_data("5803")["bias"] is None                         # 日をまたいだら数え直す

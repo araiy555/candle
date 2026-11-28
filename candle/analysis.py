@@ -145,6 +145,8 @@ SIGNAL_KINDS = [
     ("sweep", LOW(), "流動性タッチ：下にタッチ→上へ", 1),
     ("sweep", LOW(liquidity="external"), "　└ 外部流動性（当日安値・大きな波の安値・前日安値）", 1),
     ("sweep", LOW(liquidity="internal"), "　└ 内部流動性", 1),
+    ("sweep", LOW(cleared=True), "　└ 下の流動性が無くなった（上にしか残っていない）", 1),
+    ("sweep", LOW(cleared=False), "　└ 下にまだ流動性が残っている", 1),
     ("sweep", LOW(zone="discount"), "　└ 割安ゾーン", 1),
     ("sweep", LOW(zone="premium"), "　└ 割高ゾーン", 1),
     ("sweep", LOW(bos_setup=True), "　└ 内部流動性のうち、高値ブレイク後＋割安ゾーン", 1),

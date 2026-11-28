@@ -104,8 +104,9 @@ def test_hourly_frame_uses_past_days_and_its_external_liquidity(tmp_path):
     assert hour["minutes"] == 60 and len(hour["bars"]) == 19
     one = e.chart_data("T")
     assert one["frames"][-1]["name"] == "1時間足" and one["frames"][-1]["bars"] == 19
-    ext = {(x["side"], x["level"]) for x in one["liquidity"] if x["kind"] == "external"}
-    assert ("low", 999) in ext and ("high", 1061) in ext            # 数日間の高値・安値も、同じ「外部流動性」として出る
+    ext = {(x["side"], x["level"]) for x in one["htf_external"]}
+    assert ("low", 999) in ext and ("high", 1061) in ext            # 数日間の高値・安値は、上位足の外部流動性として別に出す
+    assert all(x["level"] not in (999, 1061) for x in one["liquidity"])   # 短い足の線は、当日の流動性だけ
     assert e.htf("T").split(",")[-1].startswith("60:")
 
 
@@ -164,7 +165,7 @@ def test_imported_history_gives_upper_external_liquidity(tmp_path):
     e.load_history(["6861"], 1, today=date(2026, 11, 27))
     for b in today:
         e.on_bar(b)
-    assert [x for x in e.chart_data("6861")["liquidity"] if x["side"] == "high" and x["level"] > 14900] == []
+    assert [x for x in e.chart_data("6861")["htf_external"] if x["side"] == "high" and x["level"] > 14900] == []
 
     def fake(symbol, minutes):                       # 過去の日足：9月に 15,800 の高値、その後は下
         if minutes == 60:
@@ -178,8 +179,8 @@ def test_imported_history_gives_upper_external_liquidity(tmp_path):
             break
         time.sleep(0.02)
     app._apply_history()
-    ups = sorted(x["level"] for x in e.chart_data("6861")["liquidity"] if x["side"] == "high" and x["kind"] == "external")
-    assert 15800 in ups                                                # 上の外部流動性として出る
+    ups = sorted(x["level"] for x in e.chart_data("6861")["htf_external"] if x["side"] == "high")
+    assert 15800 in ups                                                # 上位足の、上の外部流動性として出る
     assert 15800 in {x["level"] for x in e.chart_data("6861", 60)["liquidity"] if x["side"] == "high"}
     assert (tmp_path / "history_fetched.json").exists() and len(e.daily["6861"]) == 14
     payload = {"chart": {"result": [{"timestamp": [1790553600, 1790640000], "indicators": {"quote": [{

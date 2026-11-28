@@ -237,7 +237,7 @@ class App:
         engine.auto_chart = flag.exists() and flag.read_text().strip() == "1"
         if old is not None:   # 受信済みの足や価格は引き継ぐ（切り替えで判定を途切れさせない）
             engine.history, engine.prices = old.history, old.prices
-            for name in ("prev_days", "hourly_past", "last_day", "daily", "_own_past", "_history_ref"):
+            for name in ("prev_days", "hourly_past", "last_day", "daily", "_own_past", "_history_ref", "bias"):
                 setattr(engine, name, getattr(old, name))     # 過去の足・上位足の流動性も引き継ぐ
             engine.watchlist, engine.names = old.watchlist, old.names
             engine.quotes = old.quotes
