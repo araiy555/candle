@@ -33,6 +33,7 @@ class TradeSettings:
     notify_seen: str = "tweezer_bottom,squeeze,fvg_hold,fvg_break,wall_break,liq_sweep,open_dip"
     min_range_pct: float = 0.15      # 足の平均値幅率の下限（%）。これ未満は値動きが小さい（レンジ）とみなして見送る。0なら除かない
     vwap_rule: str = "above"        # above=株価がVWAPより下のときは買わない / off=VWAPを見ない
+    touch_zone: str = "all"          # 流動性タッチ（下にタッチ）を通知する場面: all=すべて / discount=割安ゾーンのときだけ
     min_drop_pct: float = 0.3        # 直前の下落率の下限（%）。横ばいの中のサインを除く。0なら除かない
     mkt_fut_drop: float = 0.3        # 地合い: 先物が5分でこの%以上下げたら「警戒」
     mkt_topix_drop: float = 0.15     # 地合い: 加えてTOPIXが5分でこの%以上下げたら「警戒強化」
@@ -67,6 +68,8 @@ class TradeSettings:
             raise ValueError("平均値幅率の下限は0〜5%にしてください")
         if self.vwap_rule not in ("above", "off"):
             raise ValueError("VWAPの条件が不正です")
+        if self.touch_zone not in ("discount", "all"):
+            raise ValueError("流動性タッチの条件が不正です")
         if self.min_price < 0:
             raise ValueError("株価の下限は0以上にしてください")
         if self.max_hold_min < 0:

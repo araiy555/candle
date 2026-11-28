@@ -68,6 +68,7 @@ def test_engine_notifies_and_records_sweep(tmp_path):
     e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"},
                     notify=lambda *a: sent.append(a), notify_ids={"liq_sweep"})
     e.names = {"5803": "フジクラ"}
+    e.update_settings({"touch_zone": "all"})                            # 割安ゾーン以外のタッチも知らせる設定
     bars = bars_from(BASE + [(4942, 4945, 4915, 4944, 12000), (4944, 4950, 4943, 4949, 4000)], symbol="5803")
     e.on_board("5803", {"CurrentPrice": 4944, "TradingVolume": 500000, "PreviousClose": 4900.0,
                         "Sell1": {"Price": 4945, "Qty": 300}, "Buy1": {"Price": 4944, "Qty": 400}}, bars[-2].end)
@@ -113,10 +114,11 @@ def test_one_notification_for_external_and_internal_with_next_target(tmp_path):
     from candle.settings import TradeSettings
     from candle.store import Store
 
-    def run(sub, rows, prev=None):
+    def run(sub, rows, prev=None, zone="discount"):
         store, sent = Store(tmp_path / f"{sub}.sqlite"), []
         e = PaperEngine(store, RiskManager(RiskLimits()), enabled={"tweezer_bottom"}, trade_enabled=False,
                         notify=lambda *a: sent.append(a), notify_ids={"liq_sweep"})
+        e.update_settings({"touch_zone": zone})
         if prev:
             e.prev_days["5803"] = dict(day="2026-11-23", close=1020, **prev)
         for b in bars_from(rows, symbol="5803"):
@@ -132,7 +134,9 @@ def test_one_notification_for_external_and_internal_with_next_target(tmp_path):
     assert store.recent_signals("paper")[0]["strategy_id"] == "liq_sweep"
     assert (m["liquidity"], m["bos_setup"], m["target"]) == ("internal", True, 1040)     # 場面の印は記録に残る
     # 外部流動性（当日安値）を割って戻した → 同じ通知名で知らせる
-    sent, _, m = run("b", BASE + [(4942, 4945, 4915, 4944, 12000)])
+    sent, _, m = run("b0", BASE + [(4942, 4945, 4915, 4944, 12000)])
+    assert sent == [] and m["zone"] == "below"       # 割安ゾーンまで下がった流動性ではない → 知らせない（記録は残る）
+    sent, _, m = run("b", BASE + [(4942, 4945, 4915, 4944, 12000)], zone="all")
     assert [a[0] for a in sent] == ["流動性タッチ  5803"] and "下の外部流動性（当日安値） 4,930.0" in sent[0][1]
     assert m["liquidity"] == "external" and m["target"] == 4977
     # 前日安値も割って戻した／前日高値のほうが近ければ、それを次の目標にする

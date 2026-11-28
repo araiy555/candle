@@ -29,7 +29,7 @@ class SweepParams:
     vol_avg: int = 10
     vol_mult: float = 2.0        # 平均の何倍で「出来高が増えた」とみなすか
     major: int = 10              # 外部流動性とみなす大きな波：左右この本数の中で一番安い（高い）
-    bos_lookback: int = 60       # 高値ブレイクと、直近の上昇を探す本数
+    bos_lookback: int = 330      # 高値ブレイクと、上昇（安値→高値）を探す本数。当日すべて
     min_leg: float = 0.004       # 上昇とみなす最小の値幅（安値比）
 
 

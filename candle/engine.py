@@ -475,6 +475,8 @@ class PaperEngine:
                                        kind="sweep")
         if not self._wants(sid):
             return                    # 記録だけ残す（通知をオフにしていても、後で比べられるように）
+        if not up and self.settings.touch_zone == "discount" and m.get("zone") != "discount":
+            return                    # 上昇の割安ゾーンまで下がっていない流動性では、反転を見込まない（記録だけ残す）
         if self.notify:
             label = f"{bar.symbol} {self.names.get(bar.symbol) or ''}".strip()
             self._notify(f"{name}  {label}", f"{bar.end:%H:%M} {sig.note}", bar.symbol)
