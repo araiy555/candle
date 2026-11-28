@@ -244,7 +244,8 @@ def _detect_low(bars: Sequence[Bar], p: SweepParams | None = None) -> SweepSigna
         metrics.update(targets(bars, cur.close, p))
         kind = f"下の外部流動性（{ctx['ext_kind']}）" if ctx["liquidity"] == "external" else "下の内部流動性"
         metrics["side"] = "low"
-        note = (f"{kind} {level:,.1f} にタッチ（{low:,.1f} まで）して {cur.close:,.1f} に回復。"
+        zone = {"discount": "【割安ゾーン】", "premium": "【割高ゾーン】", "below": "【上昇の起点より下】"}.get(ctx["zone"], "")
+        note = (f"{zone}{kind} {level:,.1f} にタッチ（{low:,.1f} まで）して {cur.close:,.1f} に回復。"
                 f"出来高 平均の{ratio:.1f}倍　→ " + target_text(metrics))
         conditions += context_conditions(ctx)
         return SweepSignal(cur.symbol, cur.end, cur.close, level, bars[i].start, low, note,

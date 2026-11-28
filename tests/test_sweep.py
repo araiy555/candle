@@ -32,7 +32,7 @@ def test_sweep_and_reclaim_in_one_bar_with_volume():
     sig = detect(bars_from(BASE + [(4942, 4945, 4915, 4944, 12000)]))    # 長い下ヒゲ
     assert sig is not None and (sig.level, sig.low, sig.price) == (4930, 4915, 4944)
     assert sig.metrics["volume_ratio"] > 3 and sig.metrics["reclaim_bars"] == 1
-    assert sig.note.startswith("下の外部流動性（当日安値） 4,930.0 にタッチ（4,915.0 まで）して 4,944.0 に回復")
+    assert sig.note.startswith("【上昇の起点より下】下の外部流動性（当日安値） 4,930.0 にタッチ（4,915.0 まで）して 4,944.0 に回復")
     assert "次のオーダーブロック：上の外部流動性 4,977.0（+0.67%）" in sig.note and len(sig.conditions) == 6
     assert sig.metrics["target"] == 4977 and sig.metrics["waypoints"] == []
     m = sig.metrics                                                     # 当日安値を割った＝外部流動性。割安ゾーンではない
@@ -127,7 +127,7 @@ def test_one_notification_for_external_and_internal_with_next_target(tmp_path):
     # 内部流動性を割って戻した → 次の目標は上の外部流動性（当日高値 1,040）
     sent, store, m = run("a", BOS + SWEEP)
     assert [a[0] for a in sent] == ["流動性タッチ  5803"]
-    assert sent[0][1].split(" ", 1)[1].startswith("下の内部流動性 1,018.0 にタッチ（1,015.0 まで）して 1,020.0 に回復")
+    assert sent[0][1].split(" ", 1)[1].startswith("【割安ゾーン】下の内部流動性 1,018.0 にタッチ（1,015.0 まで）して 1,020.0 に回復")
     assert "次のオーダーブロック：上の外部流動性 1,040.0（+1.96%）" in sent[0][1]
     assert store.recent_signals("paper")[0]["strategy_id"] == "liq_sweep"
     assert (m["liquidity"], m["bos_setup"], m["target"]) == ("internal", True, 1040)     # 場面の印は記録に残る
